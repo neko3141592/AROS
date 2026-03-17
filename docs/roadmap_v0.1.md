@@ -13,18 +13,19 @@
   - [x] バリデーションルールの実装（型チェック、必須フィールの設定）
 - [x] `graph/state.py`: `AgentState` の定義（TypedDict または Pydantic）
   - [x] 必要なキーの定義（例: `task`, `messages`, `current_step`, `code`, `logs`, `status`）
-  - 📝 **詳細設計**: [v0.1/01_schema_design.md](v0.1/01_schema_design.md) を参照して実装すること。
+  - 📝 **詳細設計**: [04_schema_design_v0.1.md](04_schema_design_v0.1.md) を参照して実装すること。
 
 ## 3. モックノードとエッジの実装 (Graph Definitions)
-- [ ] `graph/nodes/planner.py`: ダミーのタスク分割ロジック（モック）実装
-- [ ] `graph/nodes/researcher.py`: ダミーの論文検索結果を返すロジック（モック）実装
-- [ ] `graph/nodes/coder.py`: 単純な「Hello World」Pythonコードを生成するロジック実装
-- [ ] `graph/nodes/evaluator.py`: コードの実行結果（モック）を評価し、成功・失敗を判定するロジック実装
-- [ ] `graph/edges.py`: ノード間の条件分岐（例：エラーがあれば `coder` に戻る）の実装
-- [ ] `graph/__init__.py`: 上記ノードとエッジを結合し、StateGraphをコンパイルするロジック実装
+- 📝 **全体像**: [01_langgraph_image.md](../charts/01_langgraph_image.md) を参照。
+- [x] `graph/nodes/planner.py`: ダミーのタスク分割ロジック（モック）実装
+- [x] `graph/nodes/researcher.py`: ダミーの論文検索結果を返すロジック（モック）実装
+- [x] `graph/nodes/coder.py`: 単純な「Hello World」Pythonコードを生成するロジック実装
+- [x] `graph/nodes/evaluator.py`: コードの実行結果（モック）を評価し、成功・失敗を判定するロジック実装
+- [x] `graph/edges.py`: ノード間の条件分岐（例：エラーがあれば `coder` に戻る）の実装
+- [x] `graph/__init__.py`: 上記ノードとエッジを結合し、StateGraphをコンパイルするロジック実装
 
 ## 4. 実行エントリーポイントとロギング
-- [ ] `main.py`: CLIからLangGraphを呼び出して初期Stateを渡し、実行を開始する機能の実装
+- [x] `main.py`: CLIからLangGraphを呼び出して初期Stateを渡し、実行を開始する機能の実装
 - [ ] 基本的なロギング設定（標準出力およびローカルファイルへの実行ログ保存）
 - [ ] `storage/` ディレクトリを用いた簡易的な状態記録（JSON等）の仕組み作成
 

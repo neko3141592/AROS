@@ -10,6 +10,7 @@
 ## 2. 実機能ツールの実装 (Tools)
 - [ ] `tools/file_io.py`: 生成コードの保存、実行ログの読み書き機能の実装
   - [ ] 実行ごとのタイムスタンプ付きディレクトリ作成機能（バージョニング）
+  - [ ] **将来の拡張**: 単一ファイルの `str` 管理から、ディレクトリ構造（`Dict[str, str]` または `Workspace`）への管理移行。
 - [ ] `tools/paper_search.py`: Arxiv API または Semantic Scholar API との連携ツール実装
   - [ ] 検索クエリの構築とAPI呼び出し
   - [ ] 結果のパースとLLMプロンプト向けフォーマット整形
@@ -18,6 +19,7 @@
 - [ ] `graph/nodes/planner.py`: LLMを用いてユーザーの入力をサブタスクに分解する処理の実装
 - [ ] `graph/nodes/researcher.py`: `paper_search.py` ツールを呼び出し、必要なコンテキストを収集・要約する処理の実装
 - [ ] `graph/nodes/coder.py`: 収集したコンテキストとタスクに基づき、実際のPythonコード（ローカル実行用）をLLMで生成する処理の実装
+  - [ ] **リファクタリング**: `AgentState` の `generated_code` (str) を複数ファイル構成に対応。
 
 ## 4. ローカル実行と自己修正ループ (Local Execution & Evaluation)
 - [ ] `graph/nodes/evaluator.py` にローカル実行エンジンを一時的に統合
