@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 from langchain_core.messages import AIMessage
 from schema.task import ExperimentResult
-
+from tools.file_io import write_execution_log, write_meta
 from graph.state import AgentState
 
 
@@ -54,7 +54,18 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
         error_message=None if is_success else "Simulation error for testing retry loop."
     )
 
-    # 4) ステータスとリトライの判定
+    # 4. 実行ログの保存
+    run_paths = state.get("run_paths")
+
+    if run_paths:
+        write_execution_log(run_paths, mock_logs, append=True)
+        
+    # 5. メタ情報の保存
+    files = state.get("files")
+    if run_paths and files:
+        write_meta(run_paths, task.id, files)
+
+    # 5. ステータスとリトライの判定
     # 成功したか、リトライ上限（例：3回）に達したか
     if is_success:
         new_status = "completed"

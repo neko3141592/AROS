@@ -5,26 +5,26 @@ from typing import Any, Dict
 from langchain_core.messages import AIMessage
 
 from graph.state import AgentState
+from tools.paper_search import (
+    ArxivSearchError,
+    build_arxiv_query,
+    fetch_arxiv_raw,
+    format_papers_for_llm,
+    parse_arxiv_response,
+)
 
 
-def _build_mock_research_context(task_title: str) -> str:
+def _build_fallback_research_context(task_title: str, reason: str) -> str:
     """
     固定文章返却ロジック(v0.1用)。
     実際の論文検索結果を模したダミー情報を生成する。
     """
 
     return (
-        f"# Mock Research Context for: {task_title}\n\n"
-        "## Selected Paper: 'Attention Is All You Need' (v0.1 Mock)\n"
-        "- **Authors**: Ashish Vaswani, et al.\n"
-        "- **Summary**: This paper proposes the Transformer architecture, "
-        "relying entirely on attention mechanisms to draw global dependencies "
-        "between input and output.\n"
-        "- **Key Insight**: Multi-head self-attention allows for significantly "
-        "more parallelization than convolutional or recurrent layers.\n\n"
-        "## Implementation Notes\n"
-        "- Scaling factor for dot-product attention is 1/sqrt(d_k).\n"
-        "- Positional encoding is required to maintain sequence order information."
+        f"# Research Context (Fallback) for: {task_title}\n\n"
+        "arXiv search was unavailable, so this fallback summary is used.\n"
+        f"- Reason: {reason}\n"
+        "- Suggested direction: Start from a minimal baseline and validate with a small synthetic dataset.\n"
     )
 
 
@@ -47,10 +47,26 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
             "messages": [AIMessage(content="Researcher failed: task is missing.")],
         }
 
-    # 2) 調査と要約 (v0.1 モック)
-    # 本来はここで API実行 -> LLM要約 が入るが、
-    # 設計指針に従い「実装に特化した要約済みテキスト」を取得する。
-    summary_context = _build_mock_research_context(task_title=task.title)
+    # 2) 調査と要約 (v0.2: arXiv連携)
+    # API障害時でもワークフロー全体が止まらないよう、フォールバックを返す。
+    try:
+        query = build_arxiv_query(
+            keywords=[task.title, task.description],
+            categories=["cs.AI", "cs.LG"],
+        )
+        raw_results = fetch_arxiv_raw(query=query, max_results=5, sort_by="relevance")
+        papers = parse_arxiv_response(raw_results)
+        summary_context = format_papers_for_llm(papers)
+        message_content = (
+            "Researcher: arXiv検索を実行し、"
+            f"{len(papers)}件の論文を実装向けコンテキストに整形しました。"
+        )
+    except (ArxivSearchError, ValueError) as exc:
+        summary_context = _build_fallback_research_context(task_title=task.title, reason=str(exc))
+        message_content = (
+            "Researcher: arXiv検索に失敗したため、"
+            "フォールバックの調査コンテキストを返しました。"
+        )
 
     # 3) Stateの更新を返却
     # 要約だけを渡すことで、後続の Coder がコンテキスト上限に触れるのを防ぐ。
@@ -60,10 +76,7 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
         "current_step": "coder",
         "messages": [
             AIMessage(
-                content=(
-                    "Researcher: 関連論文の調査を完了し、"
-                    "実装に必要な要約（Context）を抽出しました。"
-                )
+                content=message_content
             )
         ],
         "error": None,

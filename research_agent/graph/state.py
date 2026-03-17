@@ -2,6 +2,7 @@ from typing import TypedDict, Annotated, List, Optional
 import operator
 from langchain_core.messages import BaseMessage
 from schema.task import Task, ExperimentResult
+from ..tools.file_io import RunPaths
 
 class AgentState(TypedDict):
     """
@@ -29,6 +30,10 @@ class AgentState(TypedDict):
     # --- 5. 結果と自己修復制御 ---
     retry_count: int                     # エラー発生時のリトライ回数
     result: Optional[ExperimentResult]   # 最終的な実験結果
+
+    # --- 6. ファイル情報 ---
+    run_paths = Optional[RunPaths]
+
 
     result: Optional[ExperimentResult]
     error: Optional[str]

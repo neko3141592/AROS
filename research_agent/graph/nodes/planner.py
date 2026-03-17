@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage
 
 from graph.state import AgentState
 from schema.task import SubTask, Task
+from tools.prompt_manager import PromptManagerError, render_prompt
 
 
 def _build_mock_subtasks(task: Task) -> List[SubTask]:
@@ -66,12 +67,36 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
             ],
         }
 
-    # 2) タスク分解（モック）
+    # 2) v0.2: プロンプト定義の読み込みと適用
+    # まだモック分解ロジックを使うが、将来のLLM呼び出しに備えて事前に検証する。
+    try:
+        _ = render_prompt(
+            "system_planner",
+            {
+                "task_title": task.title,
+                "task_description": task.description,
+                "task_constraints": task.constraints,
+            },
+        )
+    except PromptManagerError as exc:
+        return {
+            "status": "failed",
+            "error": f"Planner prompt error: {exc}",
+            "messages": [
+                AIMessage(
+                    content=(
+                        "Planner failed: システムプロンプトの読み込みまたは適用に失敗しました。"
+                    )
+                )
+            ],
+        }
+
+    # 3) タスク分解（モック）
     # 元の task を直接破壊しないよう、深いコピーを作ってから更新する。
     planned_task = task.model_copy(deep=True)
     planned_task.subtasks = _build_mock_subtasks(planned_task)
 
-    # 3) ノードの出力を返却
+    # 4) ノードの出力を返却
     # LangGraph 側で既存Stateにマージされ、次ノードに引き渡される。
     return {
         "task": planned_task,

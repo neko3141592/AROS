@@ -3,6 +3,7 @@ import os
 import json
 from datetime import datetime
 from typing import Any, Dict
+from tools.file_io import create_run_paths
 import os
 import sys
 
@@ -46,7 +47,7 @@ def save_state_to_json(state: Dict[str, Any], task_id: str):
     
     print(f"--- State saved to: {file_path} ---")
 
-def run_aros(task_title: str, task_description: str):
+def run_aros(task_title: str, task_description: str, run_paths: RunPaths):
     """
     AROS v0.1 実行エントリーポイント。
     初期状態を構築し、LangGraphを起動する。
@@ -62,7 +63,10 @@ def run_aros(task_title: str, task_description: str):
         subtasks=[]  # Plannerが埋める
     )
 
-    # 2. 初期状態 (Initial State) の設定
+    # 2. 保存パスの取得
+    run_paths = create_run_paths(task_id=initial_task.id)
+
+    # 3. 初期状態 (Initial State) の設定
     initial_state: Dict[str, Any] = {
         "task": initial_task,
         "status": "starting",
@@ -72,7 +76,8 @@ def run_aros(task_title: str, task_description: str):
         "generated_code": None,
         "execution_logs": None,
         "retry_count": 0,
-        "result": None
+        "result": None,
+        "run_paths": run_paths
     }
 
     # 3. グラフの実行 (LangGraph Invoke)
@@ -112,5 +117,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 2:
         title = sys.argv[1]
         desc = sys.argv[2]
+
+    
         
     run_aros(title, desc)
