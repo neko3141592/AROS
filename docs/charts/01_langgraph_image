@@ -1,0 +1,21 @@
+```mermaid
+flowchart LR
+    U["User Input<br/>Task"] --> INIT["create_initial_state(task)"]
+    INIT --> S0["AgentState<br/>{task,messages,current_step,code,logs,status,result,error}"]
+
+    S0 --> P["planner"]
+    P -->|"return update<br/>{messages,current_step,status}"| S1["Merged State"]
+
+    S1 --> R["researcher"]
+    R -->|"return update<br/>{messages,logs,current_step}"| S2["Merged State"]
+
+    S2 --> C["coder"]
+    C -->|"return update<br/>{code,logs,current_step}"| S3["Merged State"]
+
+    S3 --> E["evaluator"]
+    E -->|"return update<br/>{status,result,error,current_step}"| S4["Merged State"]
+
+    S4 -->|"status=completed"| D["done"]
+    S4 -->|"status=failed"| C
+
+```

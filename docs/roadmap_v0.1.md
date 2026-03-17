@@ -9,10 +9,11 @@
 - [x] `README.md` の初期作成（プロジェクト概要、セットアップ手順）
 
 ## 2. スキーマと状態管理の定義 (Schema & State)
-- [ ] `schema/task.py`: Pydanticを用いた `Task`, `ExperimentResult` モデルの定義
-  - [ ] バリデーションルールの実装（型チェック、必須フィールの設定）
-- [ ] `graph/state.py`: `AgentState` の定義（TypedDict または Pydantic）
-  - [ ] 必要なキーの定義（例: `task`, `messages`, `current_step`, `code`, `logs`, `status`）
+- [x] `schema/task.py`: Pydanticを用いた `Task`, `ExperimentResult` モデルの定義
+  - [x] バリデーションルールの実装（型チェック、必須フィールの設定）
+- [x] `graph/state.py`: `AgentState` の定義（TypedDict または Pydantic）
+  - [x] 必要なキーの定義（例: `task`, `messages`, `current_step`, `code`, `logs`, `status`）
+  - 📝 **詳細設計**: [v0.1/01_schema_design.md](v0.1/01_schema_design.md) を参照して実装すること。
 
 ## 3. モックノードとエッジの実装 (Graph Definitions)
 - [ ] `graph/nodes/planner.py`: ダミーのタスク分割ロジック（モック）実装
