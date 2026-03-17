@@ -6,7 +6,7 @@
 - [x] `research_agent/` およびサブディレクトリの作成（`02_directly.md` に基づく）
 - [x] 仮想環境（venvまたはPoetry/uv）のセットアップと依存ライブラリ（`langgraph`, `langchain`, `pydantic`, `pytest` 等）のインストール
 - [x] 環境変数管理（`.env`）のセットアップ（LLM APIキー等）
-- [ ] `README.md` の初期作成（プロジェクト概要、セットアップ手順）
+- [x] `README.md` の初期作成（プロジェクト概要、セットアップ手順）
 
 ## 2. スキーマと状態管理の定義 (Schema & State)
 - [ ] `schema/task.py`: Pydanticを用いた `Task`, `ExperimentResult` モデルの定義
