@@ -2,21 +2,13 @@ from __future__ import annotations
 
 from langgraph.graph import StateGraph, END
 
-# 各コンポーネントのインポート
-try:
-    from graph.state import AgentState
-    from graph.nodes.planner import planner_node
-    from graph.nodes.researcher import researcher_node
-    from graph.nodes.coder import coder_node
-    from graph.nodes.evaluator import evaluator_node
-    from graph.edges import should_continue
-except ModuleNotFoundError:
-    from research_agent.graph.state import AgentState
-    from research_agent.graph.nodes.planner import planner_node
-    from research_agent.graph.nodes.researcher import researcher_node
-    from research_agent.graph.nodes.coder import coder_node
-    from research_agent.graph.nodes.evaluator import evaluator_node
-    from research_agent.graph.edges import should_continue
+# 絶対インポートを使用（main.pyでsys.pathに追加済み）
+from graph.state import AgentState
+from graph.nodes.planner import planner_node
+from graph.nodes.researcher import researcher_node
+from graph.nodes.coder import coder_node
+from graph.nodes.evaluator import evaluator_node
+from graph.edges import should_continue
 
 def create_research_graph():
     """

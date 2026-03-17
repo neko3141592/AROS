@@ -1,7 +1,7 @@
 from typing import TypedDict, Annotated, List, Optional
 import operator
 from langchain_core.messages import BaseMessage
-from research_agent.schema.task import Task, ExperimentResult
+from schema.task import Task, ExperimentResult
 
 class AgentState(TypedDict):
     """

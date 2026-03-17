@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "roadmap_v0.1.md",
+                "file": "roadmap_v0.2.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "roadmap_v0.1"
+              "title": "roadmap_v0.2"
             }
           }
         ]
@@ -94,7 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "roadmap_v0.1.md",
+                "file": "roadmap_v0.2.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,7 +104,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "roadmap_v0.1へのバックリンク"
+              "title": "roadmap_v0.2へのバックリンク"
             }
           },
           {
@@ -113,12 +113,12 @@
             "state": {
               "type": "outgoing-link",
               "state": {
-                "file": "roadmap_v0.1.md",
+                "file": "roadmap_v0.2.md",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               },
               "icon": "links-going-out",
-              "title": "roadmap_v0.1からのアウトゴーイングリンク"
+              "title": "roadmap_v0.2からのアウトゴーイングリンク"
             }
           },
           {
@@ -156,13 +156,13 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "roadmap_v0.1.md",
+                "file": "roadmap_v0.2.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "roadmap_v0.1のアウトライン"
+              "title": "roadmap_v0.2のアウトライン"
             }
           }
         ]
@@ -185,11 +185,12 @@
   },
   "active": "38ad77d97cdcf8b2",
   "lastOpenFiles": [
+    "roadmap_v0.1.md",
+    "roadmap_v0.6.md",
+    "roadmap_v0.2.md",
+    "roadmap_v0.5.md",
     "roadmap_v0.4.md",
     "roadmap_v0.3.md",
-    "roadmap_v0.2.md",
-    "roadmap_v0.1.md",
-    "roadmap_v0.5.md",
     "v0.1/02_context_optimization.md",
     "charts/01_langgraph_image.md",
     "v0.1/01_schema_design.md",

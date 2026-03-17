@@ -4,14 +4,8 @@ from typing import Any, Dict, List
 
 from langchain_core.messages import AIMessage
 
-try:
-    # `python main.py` のように research_agent 直下から実行する場合
-    from graph.state import AgentState
-    from schema.task import SubTask, Task
-except ModuleNotFoundError:
-    # パッケージとして import される場合（将来の拡張用）
-    from research_agent.graph.state import AgentState
-    from research_agent.schema.task import SubTask, Task
+from graph.state import AgentState
+from schema.task import SubTask, Task
 
 
 def _build_mock_subtasks(task: Task) -> List[SubTask]:

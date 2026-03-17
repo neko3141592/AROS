@@ -1,8 +1,50 @@
 import sys
+import os
+import json
+from datetime import datetime
 from typing import Any, Dict
-from langchain_core.messages import HumanMessage
-from research_agent.graph import research_graph
-from research_agent.schema.task import Task
+import os
+import sys
+
+# パッケージのルート(research_agent)をパスに追加して、絶対インポートを可能にする
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from langchain_core.messages import HumanMessage, AIMessage
+
+# research_agent 直下で実行されることを前提にインポート
+from graph import research_graph
+from schema.task import Task
+
+def json_serial(obj):
+    """JSON serialization helper for objects not serializable by default json code"""
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    raise TypeError(f"Type {type(obj)} not serializable")
+
+def save_state_to_json(state: Dict[str, Any], task_id: str):
+    """
+    AgentState をシリアライズして storage/ に保存する。
+    """
+    # 1. PydanticモデルやMessageオブジェクトをシリアライズ可能な形式に変換
+    serializable_state = state.copy()
+    serializable_state["task"] = state["task"].model_dump()
+    if state["result"]:
+        serializable_state["result"] = state["result"].model_dump()
+    
+    # メッセージの変換
+    serializable_state["messages"] = [
+        {"role": "AI" if isinstance(m, AIMessage) else "User", "content": m.content}
+        for m in state["messages"]
+    ]
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_path = f"storage/runs/state_{task_id}_{timestamp}.json"
+    
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(serializable_state, f, indent=4, ensure_ascii=False, default=json_serial)
+    
+    print(f"--- State saved to: {file_path} ---")
 
 def run_aros(task_title: str, task_description: str):
     """
@@ -41,6 +83,10 @@ def run_aros(task_title: str, task_description: str):
     # 4. 結果の表示
     print("\n=== Execution Summary ===")
     print(f"Status: {final_state['status']}")
+    
+    # 状態を JSON に保存
+    save_state_to_json(final_state, task_id=initial_task.id)
+
     print(f"Final Step: {final_state['current_step']}")
     print(f"Retry Count: {final_state['retry_count']}")
     

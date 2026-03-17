@@ -22,7 +22,9 @@
 - **Intelligence**: Claude 3.5 Sonnet / GPT-4o (Reasoning & Coding)
 - **Execution Environment**: Docker, RunPod Python SDK
 - **Data/Task Management**: Pydantic (Strict typing), PostgreSQL (Task persistence)
+- **Web API**: FastAPI (v0.6 Integration)
 - **External APIs**: Arxiv API, Semantic Scholar API
+- **Infra Provider**: RunPod (GPU Cluster)
 - **UI/Frontend**: Streamlit (Dashboard for monitoring)
 
 ## 5. システムアーキテクチャ（設計方針）
@@ -30,3 +32,4 @@
 - **State-Centric**: すべてのノードは共通の `AgentState` 型（Pydantic）を介してのみ通信する。
 - **Tool-Based Execution**: OS操作やネットワーク通信は、LLMが直接行うのではなく、定義された「Tool」を介してのみ行う。
 - **Immutable Trace**: 実験ログと生成コードは、上書きせずすべてバージョン管理（experiments/フォルダ）に保存。
+

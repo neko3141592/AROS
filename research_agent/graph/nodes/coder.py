@@ -4,12 +4,7 @@ from typing import Any, Dict
 
 from langchain_core.messages import AIMessage
 
-try:
-    # `python main.py` のように research_agent 直下から実行する場合
-    from graph.state import AgentState
-except ModuleNotFoundError:
-    # パッケージとして import される場合（将来の拡張用）
-    from research_agent.graph.state import AgentState
+from graph.state import AgentState
 
 
 def _build_mock_code(task_title: str) -> str:

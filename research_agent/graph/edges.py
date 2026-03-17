@@ -2,10 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-try:
-    from graph.state import AgentState
-except ModuleNotFoundError:
-    from research_agent.graph.state import AgentState
+from graph.state import AgentState
 
 
 def should_continue(state: AgentState) -> Literal["coder", "done"]:

@@ -4,12 +4,9 @@ import random
 from typing import Any, Dict
 
 from langchain_core.messages import AIMessage
-from research_agent.schema.task import ExperimentResult
+from schema.task import ExperimentResult
 
-try:
-    from graph.state import AgentState
-except ModuleNotFoundError:
-    from research_agent.graph.state import AgentState
+from graph.state import AgentState
 
 
 def evaluator_node(state: AgentState) -> Dict[str, Any]:

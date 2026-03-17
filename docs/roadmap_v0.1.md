@@ -26,10 +26,10 @@
 
 ## 4. 実行エントリーポイントとロギング
 - [x] `main.py`: CLIからLangGraphを呼び出して初期Stateを渡し、実行を開始する機能の実装
-- [ ] 基本的なロギング設定（標準出力およびローカルファイルへの実行ログ保存）
-- [ ] `storage/` ディレクトリを用いた簡易的な状態記録（JSON等）の仕組み作成
+- [x] 基本的なロギング設定（標準出力およびローカルファイルへの実行ログ保存）
+- [x] `storage/` ディレクトリを用いた簡易的な状態記録（JSON等）の仕組み作成
 
 ## 5. テストと動作検証
-- [ ] `tests/test_schema.py`: Pydanticモデルのバリデーションテスト
-- [ ] `tests/test_graph.py`: グラフの遷移（Planner -> Researcher -> Coder -> Evaluator）が想定通りに行われるかの単体テスト
-- [ ] （チェックポイント）モック環境で全体のループがエラーなく終了することを確認
+- [x] `tests/test_schema.py`: Pydanticモデルのバリデーションテスト
+- [x] `tests/test_graph.py`: グラフの遷移（Planner -> Researcher -> Coder -> Evaluator）が想定通りに行われるかの単体テスト
+- [x] （チェックポイント）モック環境で全体のループがエラーなく終了することを確認

@@ -4,11 +4,7 @@ from typing import Any, Dict
 
 from langchain_core.messages import AIMessage
 
-try:
-    from graph.state import AgentState
-
-except ModuleNotFoundError:
-    from research_agent.graph.state import AgentState
+from graph.state import AgentState
 
 
 def _build_mock_research_context(task_title: str) -> str:
