@@ -3,11 +3,16 @@ import json
 from datetime import datetime
 from typing import Any, Dict
 import sys
+from dotenv import load_dotenv
 
 from tools.file_io import RunPaths, create_run_paths
 
 # パッケージのルート(research_agent)をパスに追加して、絶対インポートを可能にする
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(PROJECT_ROOT)
+
+# 実行時に .env を自動読み込み（source .env 不要）
+load_dotenv(dotenv_path=os.path.join(PROJECT_ROOT, ".env"))
 
 from langchain_core.messages import HumanMessage, AIMessage
 
@@ -86,6 +91,7 @@ def run_aros(task_title: str, task_description: str):
         "current_step": "init",
         "research_context": "",
         "generated_code": None,
+        "generated_files": None,
         "execution_logs": None,
         "retry_count": 0,
         "result": None,

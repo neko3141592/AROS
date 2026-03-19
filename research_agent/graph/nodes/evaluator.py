@@ -23,7 +23,11 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
     # 1) 入力確認
     task = state.get("task")
     generated_code = state.get("generated_code")
+    generated_files = state.get("generated_files") or {}
     retry_count = state.get("retry_count", 0)
+
+    if not generated_code and isinstance(generated_files, dict):
+        generated_code = generated_files.get("main.py")
 
     if not task or not generated_code:
         return {
@@ -61,9 +65,12 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
         write_execution_log(run_paths, mock_logs, append=True)
         
     # 5. メタ情報の保存
-    files = state.get("files")
-    if run_paths and files:
-        write_meta(run_paths, task.id, files)
+    if run_paths:
+        if isinstance(generated_files, dict) and generated_files:
+            file_list = sorted(generated_files.keys())
+        else:
+            file_list = ["main.py"]
+        write_meta(run_paths, task.id, file_list)
 
     # 5. ステータスとリトライの判定
     # 成功したか、リトライ上限（例：3回）に達したか

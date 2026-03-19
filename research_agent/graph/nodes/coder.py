@@ -1,36 +1,76 @@
 from __future__ import annotations
 
+import json
+import os
+from json import JSONDecodeError
 from typing import Any, Dict
 
 from langchain_core.messages import AIMessage
+from pydantic import ValidationError
 
 from graph.state import AgentState
 from tools.prompt_manager import PromptManagerError, render_prompt
+from tools.llm_client import LLMClientError, generate_text
 from tools.file_io import save_generated_code, save_workspace_files
+from schema.llm_outputs import CoderOutput
+
+DEFAULT_MODEL_NAME = "gpt-4o-mini"
 
 
-def _build_mock_code(task_title: str) -> str:
+def _strip_code_fence(text: str) -> str:
     """
-    v0.1 用の固定コード生成ロジック。
-    仕様どおり「Hello World」を返す。
+    LLM出力にコードフェンスが含まれる場合に除去する。
     """
-    return (
-        f"# Mock code for task: {task_title}\n"
-        "def main() -> None:\n"
-        "    print(\"Hello World\")\n"
-        "\n"
-        "if __name__ == \"__main__\":\n"
-        "    main()\n"
-    )
+    cleaned = text.strip()
+    if not cleaned:
+        return cleaned
+
+    lines = cleaned.splitlines()
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+
+    return cleaned
+
+
+def _extract_first_json_payload(text: str) -> Any:
+    """
+    テキスト中の先頭JSONオブジェクト/配列を抽出する。
+    """
+    decoder = json.JSONDecoder()
+    for i, ch in enumerate(text):
+        if ch not in "[{":
+            continue
+        try:
+            obj, _ = decoder.raw_decode(text[i:])
+            return obj
+        except JSONDecodeError:
+            continue
+    raise JSONDecodeError("No valid JSON payload found in text.", text, 0)
+
+
+def _parse_coder_output(raw_text: str) -> CoderOutput:
+    cleaned = _strip_code_fence(raw_text)
+    payload = _extract_first_json_payload(cleaned)
+
+    # {"files": {...}} が正規形だが、将来の差分に備えて {...} 直下も受ける。
+    if isinstance(payload, dict) and "files" not in payload:
+        if all(isinstance(k, str) and isinstance(v, str) for k, v in payload.items()):
+            payload = {"files": payload}
+
+    output = CoderOutput.model_validate(payload)
+    if not output.files:
+        raise ValueError("Coder output 'files' is empty.")
+    if "main.py" not in output.files:
+        raise ValueError("Coder output must include 'main.py'.")
+    return output
 
 
 def coder_node(state: AgentState) -> Dict[str, Any]:
     """
-    Coderノード（v0.1モック版）。
-
-    役割:
-    - 現在の task 情報から固定コードを作る
-    - `generated_code` に保存して次ノード（evaluator）へ渡す
+    Coderノード（v0.2 LLM版）。
     """
 
     # 1. 入力チェック
@@ -47,10 +87,11 @@ def coder_node(state: AgentState) -> Dict[str, Any]:
             ],
         }
 
-    # 2. v0.2: プロンプト定義の読み込みと適用
-    # 実LLM生成は次フェーズで接続するため、ここでは設定検証まで行う。
+    run_paths = state.get("run_paths")
+
+    # 2. プロンプト生成 + LLM呼び出し
     try:
-        _ = render_prompt(
+        system_prompt = render_prompt(
             "system_coder",
             {
                 "task_title": task.title,
@@ -59,6 +100,47 @@ def coder_node(state: AgentState) -> Dict[str, Any]:
                 "research_context": state.get("research_context", ""),
             },
         )
+        user_prompt = (
+            "上記の指示に従い、JSONオブジェクトのみ返してください。"
+            "必ず次の形式を守ってください: "
+            '{"files":{"main.py":"<python code>", "README.md":"<text>"}}。'
+            "Markdownや説明文は含めないでください。"
+        )
+
+        model_name = (
+            os.getenv("MODEL_NAME", DEFAULT_MODEL_NAME).strip() or DEFAULT_MODEL_NAME
+        )
+        llm_raw = generate_text(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=model_name,
+            temperature=0.2,
+            timeout=60,
+        )
+        parsed = _parse_coder_output(llm_raw)
+        generated_files = parsed.files
+        generated_code = generated_files["main.py"]
+
+        if run_paths:
+            save_workspace_files(run_paths, generated_files)
+            save_generated_code(run_paths, generated_code, filename="main.py")
+
+        return {
+            "generated_code": generated_code,
+            "generated_files": generated_files,
+            "status": "coding",
+            "current_step": "evaluator",
+            "messages": [
+                AIMessage(
+                    content=(
+                        "Coder: LLMで複数ファイルを生成し、"
+                        f"{len(generated_files)}件をworkspaceに保存しました。"
+                    )
+                )
+            ],
+            "error": None,
+        }
+
     except PromptManagerError as exc:
         return {
             "status": "failed",
@@ -71,46 +153,18 @@ def coder_node(state: AgentState) -> Dict[str, Any]:
                 )
             ],
         }
-
-    # 3. モックコード生成
-    # v0.1 では実LLM生成を行わず、固定の Hello World コードを生成する。
-    generated_code = _build_mock_code(task_title=task.title)
-
-    # 4. 書いたファイルの保存
-    run_paths = state.get("run_paths")
-
-    # ダミーfilename(将来的にはAIに生成させる)
-    filename = "main.py"
-
-    if run_paths:
-        save_generated_code(run_paths, generated_code, filename=filename)
-        # 将来拡張導線: 単一文字列ではなく、複数ファイルを workspace に保存できるようにする
-        save_workspace_files(
-            run_paths,
-            {
-                "main.py": generated_code,
-                "README.md": (
-                    f"# Workspace for {task.title}\n\n"
-                    "This directory stores multi-file outputs generated by coder."
-                ),
-            },
-        )
-
-    # 5. State更新内容を返却
-    # LangGraph が既存Stateにマージし、次ノードで利用可能になる。
-    return {
-        "generated_code": generated_code,
-        "status": "coding",
-        "current_step": "evaluator",
-        "messages": [
-            AIMessage(
-                content=(
-                    "Coder: v0.1モックとして Hello World コードを生成しました。"
+    except (LLMClientError, JSONDecodeError, ValidationError, ValueError) as exc:
+        return {
+            "status": "failed",
+            "error": f"Coder parse/runtime error: {exc}",
+            "messages": [
+                AIMessage(
+                    content=(
+                        "Coder failed: LLM出力のJSONパースまたは検証に失敗しました。"
+                    )
                 )
-            )
-        ],
-        "error": None,
-    }
+            ],
+        }
 
 
 # 将来 `builder.add_node("coder", coder)` のように使えるよう別名も用意

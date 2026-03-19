@@ -1,4 +1,4 @@
-from typing import TypedDict, Annotated, List, Optional
+from typing import TypedDict, Annotated, Dict, List, Optional
 import operator
 from langchain_core.messages import BaseMessage
 from schema.task import Task, ExperimentResult
@@ -25,6 +25,7 @@ class AgentState(TypedDict):
     
     # --- 4. 生成物・実験データ ---
     generated_code: Optional[str]        # Coderが生成したPythonコード
+    generated_files: Optional[Dict[str, str]]  # Coderが生成したファイル群（path -> content）
     execution_logs: Optional[str]        # 実験の実行ログ
     
     # --- 6. ファイル情報 ---
@@ -47,6 +48,7 @@ def create_initial_state(task: Task) -> AgentState:
         "current_step": "planner",
         "research_context": "",
         "generated_code": None,
+        "generated_files": None,
         "execution_logs": None,
         "run_paths": None,
         "retry_count": 0,

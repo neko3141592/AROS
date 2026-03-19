@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Dict
 
 from langchain_core.messages import AIMessage
+from tools.llm_client import LLMClientError, generate_text
+from tools.prompt_manager import PromptManagerError, render_prompt
 
 from graph.state import AgentState
 from tools.paper_search import (
@@ -12,6 +15,8 @@ from tools.paper_search import (
     format_papers_for_llm,
     parse_arxiv_response,
 )
+
+DEFAULT_MODEL_NAME = "gpt-4o-mini"
 
 
 def _build_fallback_research_context(task_title: str, reason: str) -> str:
@@ -26,7 +31,6 @@ def _build_fallback_research_context(task_title: str, reason: str) -> str:
         f"- Reason: {reason}\n"
         "- Suggested direction: Start from a minimal baseline and validate with a small synthetic dataset.\n"
     )
-
 
 def researcher_node(state: AgentState) -> Dict[str, Any]:
     """
@@ -56,12 +60,39 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
         )
         raw_results = fetch_arxiv_raw(query=query, max_results=5, sort_by="relevance")
         papers = parse_arxiv_response(raw_results)
-        summary_context = format_papers_for_llm(papers)
+        formatted_context = format_papers_for_llm(papers)
+
+        system_prompt = render_prompt(
+            "system_researcher",
+            {
+                "task_title": task.title,
+                "task_description": task.description,
+                "search_results": formatted_context,
+            }
+        )
+
+        user_prompt = (
+            "上記の指示に従い、Markdown形式の実装コンテキストのみを返してください。"
+            "前置きやコードフェンスは不要です。"
+        )
+
+        model_name = (
+            os.getenv("MODEL_NAME", DEFAULT_MODEL_NAME).strip() or DEFAULT_MODEL_NAME
+        )
+        summary_context = generate_text(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=model_name,
+            temperature=0.2,
+            timeout=30,
+        )
+
         message_content = (
             "Researcher: arXiv検索を実行し、"
             f"{len(papers)}件の論文を実装向けコンテキストに整形しました。"
         )
-    except (ArxivSearchError, ValueError) as exc:
+
+    except (ArxivSearchError, ValueError, PromptManagerError, LLMClientError) as exc:
         summary_context = _build_fallback_research_context(task_title=task.title, reason=str(exc))
         message_content = (
             "Researcher: arXiv検索に失敗したため、"

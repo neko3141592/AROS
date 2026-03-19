@@ -16,10 +16,10 @@
   - [x] 結果のパースとLLMプロンプト向けフォーマット整形
 
 ## 3. LLMノードの実装 (LLM Integration)
-- [ ] `graph/nodes/planner.py`: LLMを用いてユーザーの入力をサブタスクに分解する処理の実装
-- [ ] `graph/nodes/researcher.py`: `paper_search.py` ツールを呼び出し、必要なコンテキストを収集・要約する処理の実装
-- [ ] `graph/nodes/coder.py`: 収集したコンテキストとタスクに基づき、実際のPythonコード（ローカル実行用）をLLMで生成する処理の実装
-  - [ ] **リファクタリング**: `AgentState` の `generated_code` (str) を複数ファイル構成に対応。
+- [x] `graph/nodes/planner.py`: LLMを用いてユーザーの入力をサブタスクに分解する処理の実装
+- [x] `graph/nodes/researcher.py`: `paper_search.py` ツールを呼び出し、必要なコンテキストを収集・要約する処理の実装
+- [x] `graph/nodes/coder.py`: 収集したコンテキストとタスクに基づき、実際のPythonコード（ローカル実行用）をLLMで生成する処理の実装
+  - [x] **リファクタリング**: `AgentState` の `generated_code` (str) を複数ファイル構成（`generated_files`）に対応。
 
 ## 4. ローカル実行と自己修正ループ (Local Execution & Evaluation)
 - [ ] `graph/nodes/evaluator.py` にローカル実行エンジンを一時的に統合

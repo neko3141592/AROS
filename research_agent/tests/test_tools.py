@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +16,7 @@ from tools.file_io import (  # noqa: E402
     read_generated_code,
     save_generated_code,
     save_workspace_files,
+    write_meta,
     write_execution_log,
 )
 import tools.paper_search as paper_search  # noqa: E402
@@ -74,6 +76,16 @@ def test_save_workspace_files_rejects_parent_traversal(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError):
         save_workspace_files(paths, {"../evil.py": "print('bad')\n"})
+
+
+def test_write_meta_persists_file_list(tmp_path: Path) -> None:
+    paths = create_run_paths(task_id="task-006", base_dir=tmp_path)
+
+    write_meta(paths, task_id="task-006", files=["main.py", "analysis/run.py"])
+    payload = json.loads(paths.meta_path.read_text(encoding="utf-8"))
+
+    assert payload["task_id"] == "task-006"
+    assert payload["files"] == ["main.py", "analysis/run.py"]
 
 
 def test_build_arxiv_query_includes_keywords_and_categories() -> None:

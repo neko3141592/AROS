@@ -1,0 +1,1 @@
+This is a basic implementation of a Transformer model using PyTorch. The model consists of multi-head attention layers and can be tested with a synthetic dataset.

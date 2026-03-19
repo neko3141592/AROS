@@ -1,54 +1,86 @@
 from __future__ import annotations
 
+import json
+import os
+from json import JSONDecodeError
 from typing import Any, Dict, List
 
 from langchain_core.messages import AIMessage
+from pydantic import ValidationError
 
 from graph.state import AgentState
-from schema.task import SubTask, Task
+from schema.llm_outputs import PlannerOutput
+from schema.task import SubTask
+from tools.llm_client import LLMClientError, generate_text
 from tools.prompt_manager import PromptManagerError, render_prompt
 
+DEFAULT_MODEL_NAME = "gpt-4o-mini"
 
-def _build_mock_subtasks(task: Task) -> List[SubTask]:
+
+def _strip_code_fence(text: str) -> str:
     """
-    v0.1 用のモック分解ロジック。
-    実運用のLLM分解ではなく、固定の3ステップを返す。
+    LLMが返してきた ```json ... ``` を除去する。
     """
+    s = text.strip()
+    lines = s.splitlines()
+    if not lines:
+        return s
+
+    if not lines[0].strip().startswith("```"):
+        return s
+
+    lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+
+    return "\n".join(lines).strip()
+
+
+def _extract_first_json_payload(text: str) -> Any:
+    """
+    LLM出力から最初の JSON オブジェクト/配列を切り出して decode する。
+    """
+    decoder = json.JSONDecoder()
+    for i, ch in enumerate(text):
+        if ch not in "[{":
+            continue
+        try:
+            obj, _ = decoder.raw_decode(text[i:])
+            return obj
+        except JSONDecodeError:
+            continue
+    raise JSONDecodeError("No valid JSON payload found in text.", text, 0)
+
+
+def _parse_planner_output(raw_text: str) -> PlannerOutput:
+    cleaned = _strip_code_fence(raw_text)
+    payload = _extract_first_json_payload(cleaned)
+
+    # prompt仕様: JSON配列のみ想定だが、将来のため object も許容
+    if isinstance(payload, list):
+        payload = {"subtasks": payload}
+    elif not isinstance(payload, dict):
+        raise ValueError("Planner output JSON must be list or object.")
+
+    return PlannerOutput.model_validate(payload)
+
+
+def _to_subtasks(output: PlannerOutput) -> List[SubTask]:
     return [
         SubTask(
-            title="サブタスク1: 先行研究の要点整理",
-            description=(
-                f"「{task.title}」に関連する背景情報を3点に要約し、"
-                "次工程で使える前提知識を整理する。"
-            ),
-            assigned_agent="researcher",
-            status="pending",
-        ),
-        SubTask(
-            title="サブタスク2: 実験コードのひな形作成",
-            description=(
-                "要約した情報をもとに、最小実行可能なPythonコードを作成する。"
-            ),
-            assigned_agent="coder",
-            status="pending",
-        ),
-        SubTask(
-            title="サブタスク3: 実行結果の評価",
-            description=(
-                "生成コードの実行結果を確認し、成功/失敗と改善ポイントをまとめる。"
-            ),
-            assigned_agent="evaluator",
-            status="pending",
-        ),
+            title=item.title,
+            description=item.description,
+            assigned_agent=item.assigned_agent,
+            status=item.status,
+        )
+        for item in output.subtasks
     ]
 
 
 def planner_node(state: AgentState) -> Dict[str, Any]:
     """
-    Plannerノード（v0.1モック版）。
-
     役割:
-    - `state["task"]` を受け取り、固定サブタスクを3つ作る
+    - `state["task"]` を受け取り、LLMでサブタスクへ分解する
     - 更新した `task` を State に戻す
     - 次ノード（researcher）へ進むための最小情報を返す
     """
@@ -67,10 +99,9 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
             ],
         }
 
-    # 2) v0.2: プロンプト定義の読み込みと適用
-    # まだモック分解ロジックを使うが、将来のLLM呼び出しに備えて事前に検証する。
+    # 2) プロンプトの生成とLLM呼び出し
     try:
-        _ = render_prompt(
+        system_prompt = render_prompt(
             "system_planner",
             {
                 "task_title": task.title,
@@ -78,40 +109,65 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
                 "task_constraints": task.constraints,
             },
         )
-    except PromptManagerError as exc:
+
+        user_prompt = (
+            "上記の指示に従い、サブタスク配列をJSONで返してください。"
+            "説明文やMarkdownは含めないでください。"
+        )
+
+        model_name = (
+            os.getenv("MODEL_NAME", DEFAULT_MODEL_NAME).strip() or DEFAULT_MODEL_NAME
+        )
+        llm_raw = generate_text(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model=model_name,
+            temperature=0.2,
+            timeout=30,
+        )
+
+        parsed = _parse_planner_output(llm_raw)
+        subtasks = _to_subtasks(parsed)
+
+        planned_task = task.model_copy(deep=True)
+        planned_task.subtasks = subtasks
+
         return {
-            "status": "failed",
-            "error": f"Planner prompt error: {exc}",
+            "task": planned_task,
+            "status": "planning",
+            "current_step": "researcher",
             "messages": [
                 AIMessage(
                     content=(
-                        "Planner failed: システムプロンプトの読み込みまたは適用に失敗しました。"
+                        "Planner: LLM分解を実行し、"
+                        f"{len(planned_task.subtasks)} 件のサブタスクを作成しました。"
                     )
+                )
+            ],
+            "error": None,
+        }
+
+    except (JSONDecodeError, ValidationError, ValueError) as exc:
+        return {
+            "status": "failed",
+            "error": f"Planner parse error: {exc}",
+            "messages": [
+                AIMessage(
+                    content="Planner failed: LLM出力のJSONパースに失敗しました。"
                 )
             ],
         }
 
-    # 3) タスク分解（モック）
-    # 元の task を直接破壊しないよう、深いコピーを作ってから更新する。
-    planned_task = task.model_copy(deep=True)
-    planned_task.subtasks = _build_mock_subtasks(planned_task)
-
-    # 4) ノードの出力を返却
-    # LangGraph 側で既存Stateにマージされ、次ノードに引き渡される。
-    return {
-        "task": planned_task,
-        "status": "planning",
-        "current_step": "researcher",
-        "messages": [
-            AIMessage(
-                content=(
-                    "Planner: モック分解を実行し、"
-                    f"{len(planned_task.subtasks)} 件のサブタスクを作成しました。"
+    except (PromptManagerError, LLMClientError) as exc:
+        return {
+            "status": "failed",
+            "error": f"Planner runtime error: {exc}",
+            "messages": [
+                AIMessage(
+                    content="Planner failed: プロンプト生成またはLLM呼び出しに失敗しました。"
                 )
-            )
-        ],
-        "error": None,
-    }
+            ],
+        }
 
 
 # 将来 `builder.add_node(\"planner\", planner)` のように使えるよう別名も用意
