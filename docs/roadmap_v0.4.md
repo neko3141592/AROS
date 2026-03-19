@@ -8,9 +8,9 @@
 - [ ] CLIプロンプトでの承認待ち、またはLangGraphの `interrupt_before`/`interrupt_after` 機能を用いたステートの中断・再開機構の実装
 
 ## 2. データベースとタスク永続化設定
-- [ ] PostgreSQLデータベースのスキーマ設計（`tasks`, `experiments`, `logs` テーブル）
+- [ ] SQLiteデータベースのスキーマ設計（`tasks`, `experiments`, `logs` テーブル）
 - [ ] SQLAlchemy / SQLModel を用いたORMの設定とモデル定義
-- [ ] Graphのチェックポインター（LangGraph Checkpointer）としてPostgreSQLを接続し、AgentState の永続化・復元を可能にする
+- [ ] Graphのチェックポインター（LangGraph Checkpointer）としてSQLiteを接続し、AgentState の永続化・復元を可能にする
 - [ ] 過去の実験結果を検索し、似たタスクの知識としてプロンプトに組み込むRetrievalロジック（Memory）の基礎実装
 
 ## 3. ロギングとモニタリングの強化
@@ -19,4 +19,4 @@
 
 ## 4. テストと動作検証
 - [ ] HITL状態の際に、外部から入力を与えてフローを再開させるテストの実装
-- [ ] PostgreSQLによるState復元テスト（プロセスを一度killしても、DBから直前の状態を読み込んで再開できることの確認）
+- [ ] SQLiteによるState復元テスト（プロセスを一度killしても、DBから直前の状態を読み込んで再開できることの確認）

@@ -2,7 +2,7 @@ from typing import TypedDict, Annotated, List, Optional
 import operator
 from langchain_core.messages import BaseMessage
 from schema.task import Task, ExperimentResult
-from ..tools.file_io import RunPaths
+from tools.file_io import RunPaths
 
 class AgentState(TypedDict):
     """
@@ -27,14 +27,11 @@ class AgentState(TypedDict):
     generated_code: Optional[str]        # Coderが生成したPythonコード
     execution_logs: Optional[str]        # 実験の実行ログ
     
+    # --- 6. ファイル情報 ---
+    run_paths: Optional[RunPaths]        # runごとの保存先情報
+
     # --- 5. 結果と自己修復制御 ---
     retry_count: int                     # エラー発生時のリトライ回数
-    result: Optional[ExperimentResult]   # 最終的な実験結果
-
-    # --- 6. ファイル情報 ---
-    run_paths = Optional[RunPaths]
-
-
     result: Optional[ExperimentResult]
     error: Optional[str]
 
@@ -48,8 +45,11 @@ def create_initial_state(task: Task) -> AgentState:
         "task": task,
         "messages": [],
         "current_step": "planner",
-        "code": None,
-        "logs": [],
+        "research_context": "",
+        "generated_code": None,
+        "execution_logs": None,
+        "run_paths": None,
+        "retry_count": 0,
         "status": "pending",
         "result": None,
         "error": None,

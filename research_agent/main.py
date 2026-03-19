@@ -1,11 +1,10 @@
-import sys
 import os
 import json
 from datetime import datetime
 from typing import Any, Dict
-from tools.file_io import create_run_paths
-import os
 import sys
+
+from tools.file_io import RunPaths, create_run_paths
 
 # パッケージのルート(research_agent)をパスに追加して、絶対インポートを可能にする
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -22,6 +21,17 @@ def json_serial(obj):
         return obj.isoformat()
     raise TypeError(f"Type {type(obj)} not serializable")
 
+
+def _serialize_run_paths(run_paths: RunPaths) -> Dict[str, str]:
+    return {
+        "run_id": run_paths.run_id,
+        "run_dir": str(run_paths.run_dir),
+        "code_path": str(run_paths.code_path),
+        "log_path": str(run_paths.log_path),
+        "workspace_dir": str(run_paths.workspace_dir),
+        "meta_path": str(run_paths.meta_path),
+    }
+
 def save_state_to_json(state: Dict[str, Any], task_id: str):
     """
     AgentState をシリアライズして storage/ に保存する。
@@ -31,6 +41,8 @@ def save_state_to_json(state: Dict[str, Any], task_id: str):
     serializable_state["task"] = state["task"].model_dump()
     if state["result"]:
         serializable_state["result"] = state["result"].model_dump()
+    if state.get("run_paths"):
+        serializable_state["run_paths"] = _serialize_run_paths(state["run_paths"])
     
     # メッセージの変換
     serializable_state["messages"] = [
@@ -47,7 +59,7 @@ def save_state_to_json(state: Dict[str, Any], task_id: str):
     
     print(f"--- State saved to: {file_path} ---")
 
-def run_aros(task_title: str, task_description: str, run_paths: RunPaths):
+def run_aros(task_title: str, task_description: str):
     """
     AROS v0.1 実行エントリーポイント。
     初期状態を構築し、LangGraphを起動する。
@@ -77,7 +89,8 @@ def run_aros(task_title: str, task_description: str, run_paths: RunPaths):
         "execution_logs": None,
         "retry_count": 0,
         "result": None,
-        "run_paths": run_paths
+        "run_paths": run_paths,
+        "error": None,
     }
 
     # 3. グラフの実行 (LangGraph Invoke)
