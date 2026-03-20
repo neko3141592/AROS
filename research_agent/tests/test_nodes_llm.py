@@ -13,7 +13,7 @@ import graph.nodes.coder as coder_mod  # noqa: E402
 import graph.nodes.planner as planner_mod  # noqa: E402
 import graph.nodes.researcher as researcher_mod  # noqa: E402
 from schema.task import Task  # noqa: E402
-from tools.file_io import create_run_paths  # noqa: E402
+from tools.file_io import create_run_paths, save_workspace_files  # noqa: E402
 
 
 def _build_state(task: Task, run_paths: Any = None) -> Dict[str, Any]:
@@ -141,7 +141,11 @@ def test_coder_saves_workspace_files(monkeypatch: pytest.MonkeyPatch, tmp_path: 
             }
         }
     )
-    monkeypatch.setattr(coder_mod, "generate_text", lambda **_kwargs: coder_json)
+    monkeypatch.setattr(
+        coder_mod,
+        "generate_with_tools",
+        lambda **_kwargs: {"content": coder_json, "tool_calls": []},
+    )
 
     result = coder_mod.coder_node(state)
 
@@ -152,3 +156,35 @@ def test_coder_saves_workspace_files(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     assert (
         run_paths.workspace_dir / "analysis" / "run.py"
     ).read_text(encoding="utf-8") == "print('analysis')\n"
+
+
+def test_coder_uses_workspace_as_source_of_truth(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    task = Task(
+        title="Coder Workspace Source",
+        description="Use workspace as source of truth",
+        constraints=["local"],
+        subtasks=[],
+    )
+    run_paths = create_run_paths(task_id=task.id, base_dir=tmp_path)
+    save_workspace_files(
+        paths=run_paths,
+        files={"main.py": "print('from workspace')\n"},
+    )
+    state = _build_state(task, run_paths=run_paths)
+    state["research_context"] = "Keep existing workspace files."
+
+    # 最終JSONに files が無くても、workspace 実体から評価へ進めることを確認
+    monkeypatch.setattr(
+        coder_mod,
+        "generate_with_tools",
+        lambda **_kwargs: {"content": '{"files": {}}', "tool_calls": []},
+    )
+
+    result = coder_mod.coder_node(state)
+
+    assert result["status"] == "coding"
+    assert result["current_step"] == "evaluator"
+    assert result["generated_code"] == "print('from workspace')\n"
+    assert result["generated_files"]["main.py"] == "print('from workspace')\n"

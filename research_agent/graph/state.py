@@ -24,15 +24,17 @@ class AgentState(TypedDict):
     research_context: str                # Researcherが収集した情報の要約など
     
     # --- 4. 生成物・実験データ ---
-    generated_code: Optional[str]        # Coderが生成したPythonコード
-    generated_files: Optional[Dict[str, str]]  # Coderが生成したファイル群（path -> content）
+    # 正本は run_paths.workspace_dir 上の実ファイル。
+    # generated_* は後方互換のための mirror（参照元は workspace）として保持する。
+    generated_code: Optional[str]
+    generated_files: Optional[Dict[str, str]]
     execution_logs: Optional[str]        # 実験の実行ログ
     execution_stdout: Optional[str]      # 実行時の標準出力
     execution_stderr: Optional[str]      # 実行時の標準エラー出力
     execution_return_code: Optional[int] # 実行時の終了コード
     
     # --- 6. ファイル情報 ---
-    run_paths: Optional[RunPaths]        # runごとの保存先情報
+    run_paths: Optional[RunPaths]        # runごとの保存先情報（workspace_dir を含む）
 
     # --- 5. 結果と自己修復制御 ---
     retry_count: int                     # エラー発生時のリトライ回数

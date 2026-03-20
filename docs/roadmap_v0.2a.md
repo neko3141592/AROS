@@ -29,7 +29,7 @@
 
 ## 5. テストと動作確認
 - [x] `tests/test_tools.py`: `file_io` / `paper_search` の単体テスト整備
-- [ ] LLMバックエンドを使った軽量E2Eタスクの実行確認
+- [x] LLMバックエンドを使った軽量E2Eタスクの実行確認
 
 ## 完了条件
 1. Planner/Researcher/Coder/Evaluator が実LLM + 実データで一巡できる。  

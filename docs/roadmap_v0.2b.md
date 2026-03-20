@@ -4,26 +4,26 @@
 v0.2aの動作基準点を維持しながら、段階的に差し替えてリグレッションを検出しやすくします。
 
 ## 1. Workspace操作ツール
-- [ ] `tools/workspace_tools.py` を新規実装
-  - [ ] `list_files`: Workspace配下のファイル一覧取得
-  - [ ] `read_file`: 任意ファイルの内容読取
-  - [ ] `edit_file` / `replace_string`: 部分修正
-  - [ ] `create_file`: 新規作成
-  - [ ] パス安全性（`workspace_dir`外アクセス、絶対パス、`..`）の防止
+- [x] `tools/workspace_tools.py` を新規実装
+  - [x] `list_files`: Workspace配下のファイル一覧取得
+  - [x] `read_file`: 任意ファイルの内容読取
+  - [x] `edit_file` / `replace_string`: 部分修正(検索)
+  - [x] `create_file`: 新規作成
+  - [x] パス安全性（`workspace_dir`外アクセス、絶対パス、`..`）の防止
 
 ## 2. CoderノードのReAct化
-- [ ] Coderに `workspace_tools.py` をバインドし、Tool Calling可能にする
-- [ ] `prompts/system_coder.yaml` を「全文生成」から「探索 + 差分修正」前提に刷新
-- [ ] 1回のCoder実行内で複数回のツール反復を許可
-  - [ ] 例: `list_files -> read_file -> edit_file -> read_file -> ...`
-- [ ] Coder内部に反復上限（例: `max_tool_steps`）と終了条件を導入
+- [x] Coderに `workspace_tools.py` をバインドし、Tool Calling可能にする
+- [x] `prompts/system_coder.yaml` を「全文生成」から「探索 + 差分修正」前提に刷新
+- [x] 1回のCoder実行内で複数回のツール反復を許可
+  - [x] 例: `list_files -> read_file -> edit_file -> read_file -> ...`
+- [x] Coder内部に反復上限（例: `max_tool_steps`）と終了条件を導入
 
 ## 3. State管理の正本移行
 - [x] 前段階として `generated_files` 対応を導入済み
-- [ ] `AgentState` の正本を `workspace_dir` ベースへ移行
-- [ ] `generated_code` / `generated_files` 依存をクリティカルパスから外す
-- [ ] Evaluator の評価対象を `AgentState["generated_code"]` ではなく `workspace_dir` の物理ファイル参照へ完全切り替え
-- [ ] 既存入出力（ログ保存、状態保存）との互換を保ちつつ段階移行
+- [x] `AgentState` の正本を `workspace_dir` ベースへ移行
+- [x] `generated_code` / `generated_files` 依存をクリティカルパスから外す
+- [x] Evaluator の評価対象を `AgentState["generated_code"]` ではなく `workspace_dir` の物理ファイル参照へ完全切り替え
+- [x] 既存入出力（ログ保存、状態保存）との互換を保ちつつ段階移行
 
 ## 4. プロジェクト単位実行管理（基盤）
 - [ ] `project_id` を導入し、`run` をプロジェクト配下で管理

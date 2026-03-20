@@ -20,6 +20,13 @@ from tools.file_io import (  # noqa: E402
     write_execution_log,
 )
 from tools.local_executor import run_workspace_python  # noqa: E402
+from tools.workspace_tools import (  # noqa: E402
+    create_file as workspace_create_file,
+    edit_file as workspace_edit_file,
+    list_files as workspace_list_files,
+    read_file as workspace_read_file,
+    replace_string as workspace_replace_string,
+)
 import tools.paper_search as paper_search  # noqa: E402
 
 
@@ -77,6 +84,53 @@ def test_save_workspace_files_rejects_parent_traversal(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError):
         save_workspace_files(paths, {"../evil.py": "print('bad')\n"})
+
+
+def test_workspace_create_and_read_file_roundtrip(tmp_path: Path) -> None:
+    paths = create_run_paths(task_id="task-005b", base_dir=tmp_path)
+
+    rel = workspace_create_file(paths, "notes/readme.txt", "hello workspace\n")
+    loaded = workspace_read_file(paths, rel)
+
+    assert rel == "notes/readme.txt"
+    assert loaded == "hello workspace\n"
+
+
+def test_workspace_create_file_rejects_overwrite_by_default(tmp_path: Path) -> None:
+    paths = create_run_paths(task_id="task-005c", base_dir=tmp_path)
+    workspace_create_file(paths, "main.py", "print('v1')\n")
+
+    with pytest.raises(FileExistsError):
+        workspace_create_file(paths, "main.py", "print('v2')\n")
+
+
+def test_workspace_edit_file_replaces_line_range(tmp_path: Path) -> None:
+    paths = create_run_paths(task_id="task-005d", base_dir=tmp_path)
+    workspace_create_file(paths, "sample.txt", "A\nB\nC\n")
+
+    rel = workspace_edit_file(paths, "sample.txt", start_line=2, end_line=3, new_text="X\nY\n")
+    loaded = workspace_read_file(paths, "sample.txt")
+
+    assert rel == "sample.txt"
+    assert loaded == "A\nX\nY\n"
+
+
+def test_workspace_replace_string_supports_count(tmp_path: Path) -> None:
+    paths = create_run_paths(task_id="task-005e", base_dir=tmp_path)
+    workspace_create_file(paths, "sample.txt", "foo foo foo\n")
+
+    rel = workspace_replace_string(paths, "sample.txt", old="foo", new="bar", count=2)
+    loaded = workspace_read_file(paths, "sample.txt")
+
+    assert rel == "sample.txt"
+    assert loaded == "bar bar foo\n"
+
+
+def test_workspace_tools_reject_parent_traversal(tmp_path: Path) -> None:
+    paths = create_run_paths(task_id="task-005f", base_dir=tmp_path)
+
+    with pytest.raises(ValueError):
+        workspace_list_files(paths, base_dir="../")
 
 
 def test_write_meta_persists_file_list(tmp_path: Path) -> None:

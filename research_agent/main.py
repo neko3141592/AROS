@@ -20,6 +20,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from graph import research_graph
 from schema.task import Task
 
+
 def json_serial(obj):
     """JSON serialization helper for objects not serializable by default json code"""
     if isinstance(obj, datetime):
@@ -36,6 +37,15 @@ def _serialize_run_paths(run_paths: RunPaths) -> Dict[str, str]:
         "workspace_dir": str(run_paths.workspace_dir),
         "meta_path": str(run_paths.meta_path),
     }
+
+
+def _read_workspace_main_code(run_paths: RunPaths) -> str:
+    target = run_paths.workspace_dir / "main.py"
+    if target.exists():
+        return target.read_text(encoding="utf-8")
+    if run_paths.code_path.exists():
+        return run_paths.code_path.read_text(encoding="utf-8")
+    return ""
 
 def save_state_to_json(state: Dict[str, Any], task_id: str):
     """
@@ -122,7 +132,8 @@ def run_aros(task_title: str, task_description: str):
         print(f"Success: {result.success}")
         if result.success:
             print("--- Generated Code Snippet ---")
-            print(final_state["generated_code"][:200] + "...")
+            snippet = _read_workspace_main_code(run_paths)[:200]
+            print((snippet + "...") if snippet else "(main.py not found)")
         else:
             print(f"Error: {result.error_message}")
 

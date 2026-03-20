@@ -9,6 +9,14 @@ from tools.local_executor import run_workspace_python
 from graph.state import AgentState
 
 
+def _collect_workspace_file_list(run_paths: Any) -> list[str]:
+    return sorted(
+        str(path.relative_to(run_paths.workspace_dir).as_posix())
+        for path in run_paths.workspace_dir.rglob("*")
+        if path.is_file()
+    )
+
+
 def evaluator_node(state: AgentState) -> Dict[str, Any]:
     """
     Evaluatorノード（v0.2 ローカル実行版）。
@@ -22,7 +30,6 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
 
     # 1) 入力確認
     task = state.get("task")
-    generated_files = state.get("generated_files") or {}
     run_paths = state.get("run_paths")
     retry_count = state.get("retry_count", 0)
 
@@ -78,17 +85,10 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
     write_execution_log(run_paths, execution_log, append=True)
 
     # 5. メタ情報の保存
-    if isinstance(generated_files, dict) and generated_files:
-        file_list = sorted(generated_files.keys())
-    else:
-        # generated_files が空でも workspace の実ファイルを優先して記録する
-        file_list = sorted(
-            str(path.relative_to(run_paths.workspace_dir))
-            for path in run_paths.workspace_dir.rglob("*")
-            if path.is_file()
-        )
-        if not file_list and (run_paths.workspace_dir / "main.py").exists():
-            file_list = ["main.py"]
+    # state上の generated_files ではなく、workspace 実体を正本として記録する
+    file_list = _collect_workspace_file_list(run_paths)
+    if not file_list and (run_paths.workspace_dir / "main.py").exists():
+        file_list = ["main.py"]
     write_meta(run_paths, task.id, file_list)
 
     # 6. ステータスとリトライの判定
