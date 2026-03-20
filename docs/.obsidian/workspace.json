@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "roadmap_v0.2.md",
+                "file": "roadmap_v0.2a.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "roadmap_v0.2"
+              "title": "roadmap_v0.2a"
             }
           }
         ]
@@ -94,7 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "roadmap_v0.2.md",
+                "file": "roadmap_v0.2a.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,7 +104,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "roadmap_v0.2へのバックリンク"
+              "title": "roadmap_v0.2aへのバックリンク"
             }
           },
           {
@@ -113,12 +113,12 @@
             "state": {
               "type": "outgoing-link",
               "state": {
-                "file": "roadmap_v0.2.md",
+                "file": "roadmap_v0.2a.md",
                 "linksCollapsed": false,
                 "unlinkedCollapsed": true
               },
               "icon": "links-going-out",
-              "title": "roadmap_v0.2からのアウトゴーイングリンク"
+              "title": "roadmap_v0.2aからのアウトゴーイングリンク"
             }
           },
           {
@@ -156,13 +156,13 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "roadmap_v0.2.md",
+                "file": "roadmap_v0.2a.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "roadmap_v0.2のアウトライン"
+              "title": "roadmap_v0.2aのアウトライン"
             }
           }
         ]
@@ -185,10 +185,13 @@
   },
   "active": "38ad77d97cdcf8b2",
   "lastOpenFiles": [
+    "roadmap_v0.2b.md",
+    "roadmap_v0.2c.md",
+    "roadmap_v0.2a.md",
+    "roadmap_v0.2.md",
     "roadmap_v0.7_to_v1.0.md",
     "roadmap_v0.6.md",
     "roadmap_v0.5.md",
-    "roadmap_v0.2.md",
     "roadmap_v0.4.md",
     "roadmap_v0.3.md",
     "roadmap_v0.1.md",

@@ -27,6 +27,9 @@ class AgentState(TypedDict):
     generated_code: Optional[str]        # Coderが生成したPythonコード
     generated_files: Optional[Dict[str, str]]  # Coderが生成したファイル群（path -> content）
     execution_logs: Optional[str]        # 実験の実行ログ
+    execution_stdout: Optional[str]      # 実行時の標準出力
+    execution_stderr: Optional[str]      # 実行時の標準エラー出力
+    execution_return_code: Optional[int] # 実行時の終了コード
     
     # --- 6. ファイル情報 ---
     run_paths: Optional[RunPaths]        # runごとの保存先情報
@@ -50,6 +53,9 @@ def create_initial_state(task: Task) -> AgentState:
         "generated_code": None,
         "generated_files": None,
         "execution_logs": None,
+        "execution_stdout": None,
+        "execution_stderr": None,
+        "execution_return_code": None,
         "run_paths": None,
         "retry_count": 0,
         "status": "pending",

@@ -19,6 +19,7 @@ from tools.file_io import (  # noqa: E402
     write_meta,
     write_execution_log,
 )
+from tools.local_executor import run_workspace_python  # noqa: E402
 import tools.paper_search as paper_search  # noqa: E402
 
 
@@ -86,6 +87,40 @@ def test_write_meta_persists_file_list(tmp_path: Path) -> None:
 
     assert payload["task_id"] == "task-006"
     assert payload["files"] == ["main.py", "analysis/run.py"]
+
+
+def test_run_workspace_python_captures_outputs_and_returncode(tmp_path: Path) -> None:
+    paths = create_run_paths(task_id="task-007", base_dir=tmp_path)
+    save_workspace_files(
+        paths,
+        {
+            "main.py": (
+                "import sys\n"
+                "print('hello stdout')\n"
+                "print('hello stderr', file=sys.stderr)\n"
+                "raise SystemExit(3)\n"
+            )
+        },
+    )
+
+    result = run_workspace_python(paths)
+
+    assert "hello stdout" in result.stdout
+    assert "hello stderr" in result.stderr
+    assert result.returncode == 3
+
+
+def test_run_workspace_python_returns_timeout_code(tmp_path: Path) -> None:
+    paths = create_run_paths(task_id="task-008", base_dir=tmp_path)
+    save_workspace_files(
+        paths,
+        {"main.py": "import time\ntime.sleep(1.0)\nprint('done')\n"},
+    )
+
+    result = run_workspace_python(paths, timeout_sec=0.01)
+
+    assert result.returncode == 124
+    assert "timed out" in result.stderr.lower()
 
 
 def test_build_arxiv_query_includes_keywords_and_categories() -> None:
