@@ -12,6 +12,12 @@ from schema.llm_outputs import CoderOutput, PlannerOutput  # noqa: E402
 
 
 def test_planner_output_parses_valid_subtasks() -> None:
+    """
+    test_planner_output_parses_valid_subtasks を実行する。
+    
+    Args:
+        なし。
+    """
     payload = {
         "subtasks": [
             {
@@ -28,11 +34,23 @@ def test_planner_output_parses_valid_subtasks() -> None:
 
 
 def test_planner_output_rejects_empty_subtasks() -> None:
+    """
+    test_planner_output_rejects_empty_subtasks を実行する。
+    
+    Args:
+        なし。
+    """
     with pytest.raises(ValidationError):
         PlannerOutput(subtasks=[])
 
 
 def test_planner_output_rejects_invalid_agent() -> None:
+    """
+    test_planner_output_rejects_invalid_agent を実行する。
+    
+    Args:
+        なし。
+    """
     with pytest.raises(ValidationError):
         PlannerOutput(
             subtasks=[
@@ -47,6 +65,12 @@ def test_planner_output_rejects_invalid_agent() -> None:
 
 
 def test_coder_output_accepts_multi_file_map() -> None:
+    """
+    test_coder_output_accepts_multi_file_map を実行する。
+    
+    Args:
+        なし。
+    """
     payload = {
         "files": {
             "main.py": "print('hello')\n",

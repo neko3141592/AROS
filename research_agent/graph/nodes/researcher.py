@@ -23,6 +23,10 @@ def _build_fallback_research_context(task_title: str, reason: str) -> str:
     """
     固定文章返却ロジック(v0.1用)。
     実際の論文検索結果を模したダミー情報を生成する。
+    
+    Args:
+        task_title: タスクのタイトル。
+        reason: フォールバック理由や補足情報。
     """
 
     return (
@@ -35,10 +39,13 @@ def _build_fallback_research_context(task_title: str, reason: str) -> str:
 def researcher_node(state: AgentState) -> Dict[str, Any]:
     """
     Researcherノード（v0.1モック版）。
-
+    
     役割:
     - 指定されたタスクに関連する論文情報を「調査・要約」する。
     - v0.1の方針に基づき、全文ではなく「実装に必要なエッセンス」のみを抽出してStateに格納する。
+    
+    Args:
+        state: ノード間で受け渡す現在の状態。
     """
     print("--- [Node: Researcher] 論文を調査・要約しています... ---")
 

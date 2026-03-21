@@ -12,6 +12,14 @@ from tools.file_io import create_run_paths, read_execution_log, save_workspace_f
 
 
 def _build_state(task: Task, run_paths: Any, retry_count: int = 0) -> Dict[str, Any]:
+    """
+    _build_state を実行する。
+    
+    Args:
+        task: 対象タスク。
+        run_paths: 実行ディレクトリ群を保持する RunPaths。
+        retry_count: retry_count に関する値。
+    """
     return {
         "task": task,
         "status": "coding",
@@ -32,6 +40,12 @@ def _build_state(task: Task, run_paths: Any, retry_count: int = 0) -> Dict[str, 
 
 
 def test_evaluator_marks_completed_on_success(tmp_path: Path) -> None:
+    """
+    test_evaluator_marks_completed_on_success を実行する。
+    
+    Args:
+        tmp_path: pytestの一時ディレクトリパス。
+    """
     task = Task(
         title="Evaluator Success",
         description="Run simple script",
@@ -55,6 +69,12 @@ def test_evaluator_marks_completed_on_success(tmp_path: Path) -> None:
 
 
 def test_evaluator_returns_to_coder_on_failure(tmp_path: Path) -> None:
+    """
+    test_evaluator_returns_to_coder_on_failure を実行する。
+    
+    Args:
+        tmp_path: pytestの一時ディレクトリパス。
+    """
     task = Task(
         title="Evaluator Failure",
         description="Run failing script",

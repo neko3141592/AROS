@@ -20,6 +20,9 @@ DEFAULT_MODEL_NAME = "gpt-4o-mini"
 def _strip_code_fence(text: str) -> str:
     """
     LLMが返してきた ```json ... ``` を除去する。
+    
+    Args:
+        text: 処理対象のテキスト。
     """
     s = text.strip()
     lines = s.splitlines()
@@ -39,6 +42,9 @@ def _strip_code_fence(text: str) -> str:
 def _extract_first_json_payload(text: str) -> Any:
     """
     LLM出力から最初の JSON オブジェクト/配列を切り出して decode する。
+    
+    Args:
+        text: 処理対象のテキスト。
     """
     decoder = json.JSONDecoder()
     for i, ch in enumerate(text):
@@ -53,6 +59,12 @@ def _extract_first_json_payload(text: str) -> Any:
 
 
 def _parse_planner_output(raw_text: str) -> PlannerOutput:
+    """
+    _parse_planner_output を実行する。
+    
+    Args:
+        raw_text: LLMから受け取った生テキスト。
+    """
     cleaned = _strip_code_fence(raw_text)
     payload = _extract_first_json_payload(cleaned)
 
@@ -66,6 +78,12 @@ def _parse_planner_output(raw_text: str) -> PlannerOutput:
 
 
 def _to_subtasks(output: PlannerOutput) -> List[SubTask]:
+    """
+    _to_subtasks を実行する。
+    
+    Args:
+        output: output に関する値。
+    """
     return [
         SubTask(
             title=item.title,
@@ -83,6 +101,9 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
     - `state["task"]` を受け取り、LLMでサブタスクへ分解する
     - 更新した `task` を State に戻す
     - 次ノード（researcher）へ進むための最小情報を返す
+    
+    Args:
+        state: ノード間で受け渡す現在の状態。
     """
 
     # 1) 入力チェック

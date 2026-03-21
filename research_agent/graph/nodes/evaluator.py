@@ -10,6 +10,12 @@ from graph.state import AgentState
 
 
 def _collect_workspace_file_list(run_paths: Any) -> list[str]:
+    """
+    _collect_workspace_file_list を実行する。
+    
+    Args:
+        run_paths: 実行ディレクトリ群を保持する RunPaths。
+    """
     return sorted(
         str(path.relative_to(run_paths.workspace_dir).as_posix())
         for path in run_paths.workspace_dir.rglob("*")
@@ -20,11 +26,14 @@ def _collect_workspace_file_list(run_paths: Any) -> list[str]:
 def evaluator_node(state: AgentState) -> Dict[str, Any]:
     """
     Evaluatorノード（v0.2 ローカル実行版）。
-
+    
     役割:
     - Coderが生成したコードを workspace で実行して評価する。
     - 成功か失敗かを判定し、失敗の場合はリトライを促す。
     - リトライ回数（retry_count）を管理し、上限を超えたら強制終了させる。
+    
+    Args:
+        state: ノード間で受け渡す現在の状態。
     """
     print("--- [Node: Evaluator] 実験結果を評価しています... ---")
 

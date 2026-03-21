@@ -22,13 +22,30 @@ from schema.task import Task
 
 
 def json_serial(obj):
-    """JSON serialization helper for objects not serializable by default json code"""
+    """
+    json.dump 用のシリアライズ補助関数。
+    
+    Args:
+        obj: JSONへ直接変換できないオブジェクト。
+    
+        Returns:
+        シリアライズ可能な値（現在は datetime の ISO文字列）。
+    """
     if isinstance(obj, datetime):
         return obj.isoformat()
     raise TypeError(f"Type {type(obj)} not serializable")
 
 
-def _serialize_run_paths(run_paths: RunPaths) -> Dict[str, str]:
+def _serialize_run_paths(run_paths: RunPaths) -> Dict[str, Any]:
+    """
+    RunPaths を JSON 保存可能な辞書へ変換する。
+    
+    Args:
+        run_paths: シリアライズ対象の RunPaths。
+    
+        Returns:
+        文字列/プリミティブのみで構成された辞書。
+    """
     return {
         "run_id": run_paths.run_id,
         "run_dir": str(run_paths.run_dir),
@@ -36,10 +53,23 @@ def _serialize_run_paths(run_paths: RunPaths) -> Dict[str, str]:
         "log_path": str(run_paths.log_path),
         "workspace_dir": str(run_paths.workspace_dir),
         "meta_path": str(run_paths.meta_path),
+        "project_id": run_paths.project_id,
+        "parent_run_id": run_paths.parent_run_id,
+        "workspace_source_run_id": run_paths.workspace_source_run_id,
     }
 
 
 def _read_workspace_main_code(run_paths: RunPaths) -> str:
+    """
+    workspace の main.py を読み込む。
+    workspace に無ければ run_dir 側の code_path を読む。
+    
+    Args:
+        run_paths: 対象runのパス情報。
+    
+        Returns:
+        main.py の内容。存在しなければ空文字。
+    """
     target = run_paths.workspace_dir / "main.py"
     if target.exists():
         return target.read_text(encoding="utf-8")
@@ -50,6 +80,10 @@ def _read_workspace_main_code(run_paths: RunPaths) -> str:
 def save_state_to_json(state: Dict[str, Any], task_id: str):
     """
     AgentState をシリアライズして storage/ に保存する。
+    
+    Args:
+        state: 保存対象の最終状態辞書。
+        task_id: 対象タスクID。
     """
     # 1. PydanticモデルやMessageオブジェクトをシリアライズ可能な形式に変換
     serializable_state = state.copy()
@@ -74,10 +108,21 @@ def save_state_to_json(state: Dict[str, Any], task_id: str):
     
     print(f"--- State saved to: {file_path} ---")
 
-def run_aros(task_title: str, task_description: str):
+def run_aros(
+    task_title: str,
+    task_description: str,
+    project_id: str | None = None,
+    parent_run_id: str | None = None,
+):
     """
     AROS v0.1 実行エントリーポイント。
     初期状態を構築し、LangGraphを起動する。
+    
+    Args:
+        task_title: 実行タスクのタイトル。
+        task_description: 実行タスクの説明。
+        project_id: プロジェクトID。指定時は project/runs 配下で実行管理する。
+        parent_run_id: 継承元run ID。指定時は親workspaceを引き継ぐ。
     """
     print("=== AROS (Autonomous Research Loop) v0.1 Starting ===")
     
@@ -91,7 +136,11 @@ def run_aros(task_title: str, task_description: str):
     )
 
     # 2. 保存パスの取得
-    run_paths = create_run_paths(task_id=initial_task.id)
+    run_paths = create_run_paths(
+        task_id=initial_task.id,
+        project_id=project_id,
+        parent_run_id=parent_run_id,
+    )
 
     # 3. 初期状態 (Initial State) の設定
     initial_state: Dict[str, Any] = {
@@ -147,10 +196,22 @@ if __name__ == "__main__":
     title = "Transformer Model Implementation"
     desc = "Implement a basic Transformer model based on 'Attention Is All You Need'."
     
+    project_id_arg: str | None = None
+    parent_run_id_arg: str | None = None
+
     if len(sys.argv) > 2:
         title = sys.argv[1]
         desc = sys.argv[2]
+    if len(sys.argv) > 3:
+        project_id_arg = sys.argv[3]
+    if len(sys.argv) > 4:
+        parent_run_id_arg = sys.argv[4]
 
     
         
-    run_aros(title, desc)
+    run_aros(
+        title,
+        desc,
+        project_id=project_id_arg,
+        parent_run_id=parent_run_id_arg,
+    )

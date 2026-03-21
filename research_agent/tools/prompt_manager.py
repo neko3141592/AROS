@@ -39,6 +39,13 @@ class PromptDefinition:
 
 
 def _resolve_prompt_path(prompt_name: str, prompts_dir: Path) -> Path:
+    """
+    _resolve_prompt_path を実行する。
+    
+    Args:
+        prompt_name: 利用するプロンプト名。
+        prompts_dir: プロンプトファイルが格納されたディレクトリ。
+    """
     file_name = prompt_name if prompt_name.endswith(".yaml") else f"{prompt_name}.yaml"
     prompt_path = prompts_dir / file_name
     if not prompt_path.exists():
@@ -47,6 +54,12 @@ def _resolve_prompt_path(prompt_name: str, prompts_dir: Path) -> Path:
 
 
 def _extract_placeholders(template: str) -> set[str]:
+    """
+    _extract_placeholders を実行する。
+    
+    Args:
+        template: プレースホルダを含むテンプレート文字列。
+    """
     return {
         field_name
         for _, field_name, _, _ in Formatter().parse(template)
@@ -55,6 +68,12 @@ def _extract_placeholders(template: str) -> set[str]:
 
 
 def _format_variable(value: Any) -> str:
+    """
+    _format_variable を実行する。
+    
+    Args:
+        value: 変換対象の値。
+    """
     if value is None:
         return ""
     if isinstance(value, (list, tuple, set)):
@@ -67,6 +86,10 @@ def _format_variable(value: Any) -> str:
 def load_prompt(prompt_name: str, prompts_dir: Path | None = None) -> PromptDefinition:
     """
     YAML 形式のプロンプト定義を読み込んで返す。
+    
+    Args:
+        prompt_name: 利用するプロンプト名。
+        prompts_dir: プロンプトファイルが格納されたディレクトリ。
     """
     resolved_dir = prompts_dir or PROMPTS_DIR
     prompt_path = _resolve_prompt_path(prompt_name, resolved_dir)
@@ -124,6 +147,10 @@ def apply_prompt(
 ) -> str:
     """
     読み込んだプロンプト定義に変数を適用して、最終的な文字列を返す。
+    
+    Args:
+        prompt_definition: 読み込んだプロンプト定義。
+        variables: テンプレート埋め込みに使う変数辞書。
     """
     missing = [
         variable
@@ -155,6 +182,11 @@ def render_prompt(
 ) -> str:
     """
     プロンプトを読み込み、変数適用までをまとめて実行する。
+    
+    Args:
+        prompt_name: 利用するプロンプト名。
+        variables: テンプレート埋め込みに使う変数辞書。
+        prompts_dir: プロンプトファイルが格納されたディレクトリ。
     """
     prompt_definition = load_prompt(prompt_name=prompt_name, prompts_dir=prompts_dir)
     return apply_prompt(prompt_definition=prompt_definition, variables=variables)
@@ -165,6 +197,11 @@ def build_system_message(
 ) -> SystemMessage:
     """
     プロンプトを SystemMessage へ変換する。
+    
+    Args:
+        prompt_name: 利用するプロンプト名。
+        variables: テンプレート埋め込みに使う変数辞書。
+        prompts_dir: プロンプトファイルが格納されたディレクトリ。
     """
     prompt_text = render_prompt(
         prompt_name=prompt_name,

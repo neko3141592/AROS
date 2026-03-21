@@ -22,6 +22,9 @@ class LocalExecutionResult:
 def _validate_relative_entrypoint(entrypoint: str) -> Path:
     """
     実行対象が workspace 配下の相対パスであることを検証する。
+    
+    Args:
+        entrypoint: 実行するエントリーポイントの相対パス。
     """
     p = Path(entrypoint)
     if p.is_absolute() or ".." in p.parts:
@@ -30,6 +33,12 @@ def _validate_relative_entrypoint(entrypoint: str) -> Path:
 
 
 def _coerce_output(value: str | bytes | None) -> str:
+    """
+    _coerce_output を実行する。
+    
+    Args:
+        value: 変換対象の値。
+    """
     if value is None:
         return ""
     if isinstance(value, bytes):
@@ -42,6 +51,11 @@ def run_workspace_python(
 ) -> LocalExecutionResult:
     """
     workspace_dir 上の Python エントリポイントを実行し、標準出力/標準エラー/終了コードを返す。
+    
+    Args:
+        run_paths: 実行ディレクトリ群を保持する RunPaths。
+        entrypoint: 実行するエントリーポイントの相対パス。
+        timeout_sec: 処理タイムアウト秒数。
     """
     if timeout_sec <= 0:
         raise ValueError("timeout_sec must be > 0.")

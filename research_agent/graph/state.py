@@ -45,6 +45,9 @@ class AgentState(TypedDict):
 def create_initial_state(task: Task) -> AgentState:
     """
     実行開始時に使う初期状態を生成する。
+    
+    Args:
+        task: 対象タスク。
     """
 
     return {

@@ -13,6 +13,9 @@ class LLMClientError(Exception):
 def _extract_text_from_response(response: Any) -> str:
     """
     LiteLLMレスポンスから最初のテキストを安全に取り出す。
+    
+    Args:
+        response: LLM API のレスポンス。
     """
     try:
         content = response["choices"][0]["message"]["content"]
@@ -30,6 +33,9 @@ def _extract_tool_response(response: Any) -> dict[str, Any]:
     """
     LiteLLMレスポンスから content / tool_calls を取り出す。
     content は tool call 時に空のことがあるため許容する。
+    
+    Args:
+        response: LLM API のレスポンス。
     """
     try:
         message = response["choices"][0]["message"]
@@ -70,6 +76,17 @@ def generate_with_tools(
 ) -> dict:
     """
     Tool Calling付きでLLMに問い合わせ、content/tool_callsを返す。
+    
+    Args:
+        system_prompt: システムプロンプト。
+        user_prompt: ユーザープロンプト。
+        model: 利用するモデル名。
+        tools: 利用可能なツール定義一覧。
+        tool_choice: ツール選択ポリシー。
+        temperature: 生成温度。
+        timeout: APIタイムアウト秒数。
+        max_retries: 最大リトライ回数。
+        base_backoff_seconds: 指数バックオフの初期待機秒数。
     """
     if max_retries < 0:
         raise ValueError("max_retries must be >= 0.")
@@ -122,6 +139,15 @@ def generate_text(
 ) -> str:
     """
     LLMへテキスト生成を依頼し、失敗時はリトライ付きで結果を返す。
+    
+    Args:
+        system_prompt: システムプロンプト。
+        user_prompt: ユーザープロンプト。
+        model: 利用するモデル名。
+        temperature: 生成温度。
+        timeout: APIタイムアウト秒数。
+        max_retries: 最大リトライ回数。
+        base_backoff_seconds: 指数バックオフの初期待機秒数。
     """
     if max_retries < 0:
         raise ValueError("max_retries must be >= 0.")

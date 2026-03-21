@@ -8,11 +8,15 @@ from tools.file_io import RunPaths
 def _resolve_workspace_path(run_paths: RunPaths, rel_path: str) -> Path:
     """
     workspace 配下の安全な絶対パスへ変換する。
-
+    
     制約:
     - 絶対パスを拒否
     - ".." を含むパスを拒否
     - resolve 後に workspace 配下であることを検証
+    
+    Args:
+        run_paths: 実行ディレクトリ群を保持する RunPaths。
+        rel_path: workspace 基準の相対パス。
     """
     raw = Path(rel_path)
     if raw.is_absolute():
@@ -34,6 +38,10 @@ def _resolve_workspace_path(run_paths: RunPaths, rel_path: str) -> Path:
 def _write_text_atomic(path: Path, content: str) -> None:
     """
     テキストをアトミックに保存する。
+    
+    Args:
+        path: 対象のパス。
+        content: 書き込み・保存する内容。
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
@@ -42,10 +50,25 @@ def _write_text_atomic(path: Path, content: str) -> None:
 
 
 def _to_workspace_relative(run_paths: RunPaths, path: Path) -> str:
+    """
+    _to_workspace_relative を実行する。
+    
+    Args:
+        run_paths: 実行ディレクトリ群を保持する RunPaths。
+        path: 対象のパス。
+    """
     return str(path.relative_to(run_paths.workspace_dir).as_posix())
 
 
 def list_files(run_paths: RunPaths, base_dir: str = ".", recursive: bool = True) -> list[str]:
+    """
+    list_files を実行する。
+    
+    Args:
+        run_paths: 実行ディレクトリ群を保持する RunPaths。
+        base_dir: 保存先のベースディレクトリ。
+        recursive: recursive に関する値。
+    """
     target_dir = _resolve_workspace_path(run_paths, base_dir)
     if not target_dir.exists():
         raise FileNotFoundError(f"Directory not found: {base_dir}")
@@ -66,6 +89,13 @@ def list_files(run_paths: RunPaths, base_dir: str = ".", recursive: bool = True)
 
 
 def read_file(run_paths: RunPaths, file_path: str) -> str:
+    """
+    read_file を実行する。
+    
+    Args:
+        run_paths: 実行ディレクトリ群を保持する RunPaths。
+        file_path: 対象ファイルの相対パス。
+    """
     target = _resolve_workspace_path(run_paths, file_path)
     if not target.exists():
         raise FileNotFoundError(f"File not found: {file_path}")
@@ -80,6 +110,15 @@ def create_file(
     content: str,
     overwrite: bool = False,
 ) -> str:
+    """
+    create_file を実行する。
+    
+    Args:
+        run_paths: 実行ディレクトリ群を保持する RunPaths。
+        file_path: 対象ファイルの相対パス。
+        content: 書き込み・保存する内容。
+        overwrite: overwrite に関する値。
+    """
     target = _resolve_workspace_path(run_paths, file_path)
 
     if target.exists():
@@ -101,6 +140,16 @@ def edit_file(
     end_line: int,
     new_text: str,
 ) -> str:
+    """
+    edit_file を実行する。
+    
+    Args:
+        run_paths: 実行ディレクトリ群を保持する RunPaths。
+        file_path: 対象ファイルの相対パス。
+        start_line: 置換開始行（1始まり）。
+        end_line: 置換終了行（1始まり）。
+        new_text: 置換後テキスト。
+    """
     if start_line < 1:
         raise ValueError("start_line must be >= 1.")
     if end_line < start_line:
@@ -140,6 +189,16 @@ def replace_string(
     new: str,
     count: int = -1,
 ) -> str:
+    """
+    replace_string を実行する。
+    
+    Args:
+        run_paths: 実行ディレクトリ群を保持する RunPaths。
+        file_path: 対象ファイルの相対パス。
+        old: 置換前文字列。
+        new: 置換後文字列。
+        count: 置換回数（-1で全件）。
+    """
     if old == "":
         raise ValueError("old must not be empty.")
     if count < -1:

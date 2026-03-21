@@ -118,6 +118,12 @@ TOOL_FUNCTIONS: Mapping[str, ToolFunction] = {
 
 
 def _strip_code_fence(text: str) -> str:
+    """
+    _strip_code_fence を実行する。
+    
+    Args:
+        text: 処理対象のテキスト。
+    """
     cleaned = text.strip()
     if not cleaned:
         return cleaned
@@ -133,6 +139,12 @@ def _strip_code_fence(text: str) -> str:
 
 
 def _extract_first_json_payload(text: str) -> Any:
+    """
+    _extract_first_json_payload を実行する。
+    
+    Args:
+        text: 処理対象のテキスト。
+    """
     decoder = json.JSONDecoder()
     for i, ch in enumerate(text):
         if ch not in "[{":
@@ -146,6 +158,12 @@ def _extract_first_json_payload(text: str) -> Any:
 
 
 def _parse_coder_output(raw_text: str) -> CoderOutput:
+    """
+    _parse_coder_output を実行する。
+    
+    Args:
+        raw_text: LLMから受け取った生テキスト。
+    """
     cleaned = _strip_code_fence(raw_text)
     payload = _extract_first_json_payload(cleaned)
 
@@ -157,6 +175,13 @@ def _parse_coder_output(raw_text: str) -> CoderOutput:
 
 
 def _build_user_prompt(base_instruction: str, observations: list[str]) -> str:
+    """
+    _build_user_prompt を実行する。
+    
+    Args:
+        base_instruction: Coder に渡す基本指示文。
+        observations: ツール実行結果の履歴。
+    """
     if not observations:
         return base_instruction
     return (
@@ -169,6 +194,12 @@ def _build_user_prompt(base_instruction: str, observations: list[str]) -> str:
 
 
 def _parse_tool_arguments(raw_arguments: Any) -> dict[str, Any]:
+    """
+    _parse_tool_arguments を実行する。
+    
+    Args:
+        raw_arguments: ツール呼び出し引数の生データ。
+    """
     if raw_arguments is None or raw_arguments == "":
         return {}
     if isinstance(raw_arguments, dict):
@@ -181,6 +212,13 @@ def _parse_tool_arguments(raw_arguments: Any) -> dict[str, Any]:
 
 
 def _execute_tool_call(tool_call: dict[str, Any], run_paths: Any) -> dict[str, Any]:
+    """
+    _execute_tool_call を実行する。
+    
+    Args:
+        tool_call: LLMが返した単一のツール呼び出し情報。
+        run_paths: 実行ディレクトリ群を保持する RunPaths。
+    """
     call_id = str(tool_call.get("id", ""))
     fn = tool_call.get("function")
     if not isinstance(fn, dict):
@@ -216,6 +254,12 @@ def _execute_tool_call(tool_call: dict[str, Any], run_paths: Any) -> dict[str, A
 
 
 def _load_workspace_files(run_paths: Any) -> dict[str, str]:
+    """
+    _load_workspace_files を実行する。
+    
+    Args:
+        run_paths: 実行ディレクトリ群を保持する RunPaths。
+    """
     file_paths = workspace_list_files(run_paths=run_paths, base_dir=".", recursive=True)
     return {
         rel_path: workspace_read_file(run_paths=run_paths, file_path=rel_path)
@@ -227,6 +271,9 @@ def _build_workspace_state_payload(run_paths: Any) -> dict[str, Any]:
     """
     workspace を正本として state へ返す payload を作る。
     generated_* は後方互換のために mirror として埋める。
+    
+    Args:
+        run_paths: 実行ディレクトリ群を保持する RunPaths。
     """
     workspace_files = _load_workspace_files(run_paths)
     if "main.py" not in workspace_files:
@@ -241,6 +288,12 @@ def _build_workspace_state_payload(run_paths: Any) -> dict[str, Any]:
 
 
 def coder_node(state: AgentState) -> Dict[str, Any]:
+    """
+    coder_node を実行する。
+    
+    Args:
+        state: ノード間で受け渡す現在の状態。
+    """
     task = state.get("task")
     if task is None:
         return {

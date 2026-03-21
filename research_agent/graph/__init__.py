@@ -19,6 +19,9 @@ def create_research_graph():
                                       | (リトライ判定)
                                       v
                                     Coder / END
+    
+    Args:
+        なし。
     """
     
     # 1) StateGraph の初期化

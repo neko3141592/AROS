@@ -26,11 +26,11 @@ v0.2aの動作基準点を維持しながら、段階的に差し替えてリグ
 - [x] 既存入出力（ログ保存、状態保存）との互換を保ちつつ段階移行
 
 ## 4. プロジェクト単位実行管理（基盤）
-- [ ] `project_id` を導入し、`run` をプロジェクト配下で管理
-- [ ] ストレージ構成を project/run 階層へ整理（例: `storage/projects/{project_id}/runs/{run_id}/workspace`）
-- [ ] `run` 作成時に `parent_run_id` を指定して前回Workspaceを引き継げる仕組みを実装（破壊的上書きではなくコピー/スナップショット方式）
-- [ ] `meta.json` に `project_id`, `parent_run_id`, `workspace_source_run_id` を保存
-- [ ] 既存の単発実行フロー（project未指定時）との後方互換を維持
+- [x] `project_id` を導入し、`run` をプロジェクト配下で管理
+- [x] ストレージ構成を project/run 階層へ整理（例: `storage/projects/{project_id}/runs/{run_id}/workspace`）
+- [x] `run` 作成時に `parent_run_id` を指定して前回Workspaceを引き継げる仕組みを実装（破壊的上書きではなくコピー/スナップショット方式）
+- [x] `meta.json` に `project_id`, `parent_run_id`, `workspace_source_run_id` を保存
+- [x] 既存の単発実行フロー（project未指定時）との後方互換を維持
 
 ## 5. 回帰防止テスト
 - [ ] `tests/test_tools.py` に `workspace_tools.py` の単体テスト追加

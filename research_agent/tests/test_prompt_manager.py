@@ -18,12 +18,24 @@ from tools.prompt_manager import (  # noqa: E402
 
 
 def test_load_prompt_reads_planner_prompt() -> None:
+    """
+    test_load_prompt_reads_planner_prompt を実行する。
+    
+    Args:
+        なし。
+    """
     prompt = load_prompt("system_planner")
     assert prompt.name == "system_planner"
     assert "task_title" in prompt.input_variables
 
 
 def test_render_prompt_formats_list_constraints() -> None:
+    """
+    test_render_prompt_formats_list_constraints を実行する。
+    
+    Args:
+        なし。
+    """
     rendered = render_prompt(
         "system_planner",
         {
@@ -38,6 +50,12 @@ def test_render_prompt_formats_list_constraints() -> None:
 
 
 def test_render_prompt_raises_when_variable_is_missing() -> None:
+    """
+    test_render_prompt_raises_when_variable_is_missing を実行する。
+    
+    Args:
+        なし。
+    """
     with pytest.raises(PromptRenderError):
         render_prompt(
             "system_coder",
@@ -51,6 +69,12 @@ def test_render_prompt_raises_when_variable_is_missing() -> None:
 
 
 def test_load_prompt_rejects_undefined_placeholder(tmp_path: Path) -> None:
+    """
+    test_load_prompt_rejects_undefined_placeholder を実行する。
+    
+    Args:
+        tmp_path: pytestの一時ディレクトリパス。
+    """
     invalid_prompt = tmp_path / "invalid.yaml"
     invalid_prompt.write_text(
         "\n".join(
@@ -70,6 +94,12 @@ def test_load_prompt_rejects_undefined_placeholder(tmp_path: Path) -> None:
 
 
 def test_build_system_message_returns_langchain_message() -> None:
+    """
+    test_build_system_message_returns_langchain_message を実行する。
+    
+    Args:
+        なし。
+    """
     message = build_system_message(
         "system_coder",
         {

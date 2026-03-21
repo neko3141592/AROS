@@ -17,6 +17,13 @@ from tools.file_io import create_run_paths, save_workspace_files  # noqa: E402
 
 
 def _build_state(task: Task, run_paths: Any = None) -> Dict[str, Any]:
+    """
+    _build_state を実行する。
+    
+    Args:
+        task: 対象タスク。
+        run_paths: 実行ディレクトリ群を保持する RunPaths。
+    """
     return {
         "task": task,
         "status": "starting",
@@ -37,6 +44,12 @@ def _build_state(task: Task, run_paths: Any = None) -> Dict[str, Any]:
 
 
 def test_planner_creates_subtasks_from_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    test_planner_creates_subtasks_from_json を実行する。
+    
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+    """
     task = Task(
         title="Planner Test",
         description="Split work into subtasks",
@@ -73,6 +86,12 @@ def test_planner_creates_subtasks_from_json(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_planner_handles_invalid_json_as_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    test_planner_handles_invalid_json_as_failed を実行する。
+    
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+    """
     task = Task(
         title="Planner Error Test",
         description="Return invalid payload",
@@ -90,6 +109,12 @@ def test_planner_handles_invalid_json_as_failed(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_researcher_puts_summary_into_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    test_researcher_puts_summary_into_state を実行する。
+    
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+    """
     task = Task(
         title="Researcher Test",
         description="Summarize relevant findings",
@@ -123,6 +148,13 @@ def test_researcher_puts_summary_into_state(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_coder_saves_workspace_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """
+    test_coder_saves_workspace_files を実行する。
+    
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+        tmp_path: pytestの一時ディレクトリパス。
+    """
     task = Task(
         title="Coder Test",
         description="Generate multiple files",
@@ -161,6 +193,13 @@ def test_coder_saves_workspace_files(monkeypatch: pytest.MonkeyPatch, tmp_path: 
 def test_coder_uses_workspace_as_source_of_truth(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    """
+    test_coder_uses_workspace_as_source_of_truth を実行する。
+    
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+        tmp_path: pytestの一時ディレクトリパス。
+    """
     task = Task(
         title="Coder Workspace Source",
         description="Use workspace as source of truth",

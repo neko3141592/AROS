@@ -11,7 +11,19 @@ import tools.llm_client as llm_client  # noqa: E402
 
 
 def test_generate_text_returns_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    test_generate_text_returns_content を実行する。
+    
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+    """
     def fake_completion(**_: object):
+        """
+        fake_completion を実行する。
+        
+        Args:
+            **_: 未使用の可変引数。
+        """
         return {"choices": [{"message": {"content": "ok"}}]}
 
     monkeypatch.setattr(llm_client, "completion", fake_completion)
@@ -20,9 +32,21 @@ def test_generate_text_returns_content(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_generate_text_retries_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    test_generate_text_retries_then_succeeds を実行する。
+    
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+    """
     calls = {"count": 0}
 
     def fake_completion(**_: object):
+        """
+        fake_completion を実行する。
+        
+        Args:
+            **_: 未使用の可変引数。
+        """
         calls["count"] += 1
         if calls["count"] < 2:
             raise RuntimeError("temporary error")
@@ -43,7 +67,19 @@ def test_generate_text_retries_then_succeeds(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_generate_text_raises_after_max_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    test_generate_text_raises_after_max_retries を実行する。
+    
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+    """
     def fake_completion(**_: object):
+        """
+        fake_completion を実行する。
+        
+        Args:
+            **_: 未使用の可変引数。
+        """
         raise RuntimeError("always fail")
 
     monkeypatch.setattr(llm_client, "completion", fake_completion)
@@ -60,7 +96,19 @@ def test_generate_text_raises_after_max_retries(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_generate_text_raises_on_invalid_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    test_generate_text_raises_on_invalid_response を実行する。
+    
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+    """
     def fake_completion(**_: object):
+        """
+        fake_completion を実行する。
+        
+        Args:
+            **_: 未使用の可変引数。
+        """
         return {"unexpected": "shape"}
 
     monkeypatch.setattr(llm_client, "completion", fake_completion)

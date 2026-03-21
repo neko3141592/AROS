@@ -12,6 +12,9 @@ def should_continue(state: AgentState) -> Literal["coder", "done"]:
     判定基準:
     - 実験が成功した、あるいはリトライ上限に達した場合は 'done' (終了) へ。
     - 実験が失敗し、かつリトライが可能（retry_countが規定値以下）な場合は 'coder' (再実装) へ。
+    
+    Args:
+        state: ノード間で受け渡す現在の状態。
     """
     
     # 1) evaluatorノードによって設定された次のステップ（next_step）を確認

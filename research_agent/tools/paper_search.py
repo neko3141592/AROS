@@ -33,10 +33,22 @@ class Paper:
 
 
 def _escape_term(term: str) -> str:
+    """
+    _escape_term を実行する。
+    
+    Args:
+        term: term に関する値。
+    """
     return term.replace('"', '\\"').strip()
 
 
 def _iso_date(value: Any) -> str:
+    """
+    _iso_date を実行する。
+    
+    Args:
+        value: 変換対象の値。
+    """
     if isinstance(value, datetime):
         return value.isoformat()
     return str(value or "")
@@ -47,6 +59,10 @@ def build_arxiv_query(
 ) -> str:
     """
     arXiv 用の search_query 文字列を構築する。
+    
+    Args:
+        keywords: 検索キーワードの配列。
+        categories: 検索対象カテゴリの配列。
     """
     normalized_keywords = [_escape_term(k) for k in keywords if k and k.strip()]
     if not normalized_keywords:
@@ -69,6 +85,11 @@ def fetch_arxiv_raw(
 ) -> list[Any]:
     """
     arXiv API を呼び出して生の検索結果を返す。
+    
+    Args:
+        query: 検索クエリ文字列。
+        max_results: 取得する最大件数。
+        sort_by: ソート基準。
     """
     if arxiv is None:
         raise ArxivSearchError(
@@ -104,6 +125,9 @@ def fetch_arxiv_raw(
 def parse_arxiv_response(raw_results: Sequence[Any]) -> list[Paper]:
     """
     arxiv.Result の配列を Paper モデルへ変換する。
+    
+    Args:
+        raw_results: 外部APIから取得した生結果。
     """
     papers: list[Paper] = []
 
@@ -138,6 +162,10 @@ def parse_arxiv_response(raw_results: Sequence[Any]) -> list[Paper]:
 def format_papers_for_llm(papers: Sequence[Paper], max_summary_chars: int = 500) -> str:
     """
     検索結果を LLM プロンプトに貼り付けやすいテキストへ整形する。
+    
+    Args:
+        papers: 整形済み論文情報の一覧。
+        max_summary_chars: 要約の最大文字数。
     """
     if not papers:
         return "No arXiv papers were found for the given query."
