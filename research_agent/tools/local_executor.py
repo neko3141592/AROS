@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,6 +18,7 @@ class LocalExecutionResult:
     stdout: str
     stderr: str
     returncode: int
+    duration_sec: float
 
 
 def _validate_relative_entrypoint(entrypoint: str) -> Path:
@@ -67,9 +69,11 @@ def run_workspace_python(
             stdout="",
             stderr=f"Entrypoint not found: {entry_rel.as_posix()}",
             returncode=127,
+            duration_sec=0.0,
         )
 
     cmd = [sys.executable, entry_rel.as_posix()]
+    start = time.monotonic()
     try:
         completed = subprocess.run(
             cmd,
@@ -83,6 +87,7 @@ def run_workspace_python(
             stdout=completed.stdout,
             stderr=completed.stderr,
             returncode=completed.returncode,
+            duration_sec=max(0.0, time.monotonic() - start),
         )
     except subprocess.TimeoutExpired as exc:
         stdout = _coerce_output(exc.stdout)
@@ -93,4 +98,9 @@ def run_workspace_python(
         else:
             stderr = timeout_message
 
-        return LocalExecutionResult(stdout=stdout, stderr=stderr, returncode=124)
+        return LocalExecutionResult(
+            stdout=stdout,
+            stderr=stderr,
+            returncode=124,
+            duration_sec=max(0.0, time.monotonic() - start),
+        )

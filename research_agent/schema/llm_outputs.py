@@ -39,3 +39,16 @@ class CoderOutput(BaseModel):
     files: Dict[str, str] = Field(
         default_factory=dict, description="生成ファイル群（path -> content）"
     )
+
+
+class EvaluatorAnalysisOutput(BaseModel):
+    """
+    Evaluator が失敗解析用 LLM から受け取る補助出力モデル。
+    """
+
+    likely_cause: str = Field(..., min_length=1, description="推定される主因")
+    suggested_fixes: List[str] = Field(
+        default_factory=list, description="具体的な修正候補"
+    )
+    can_self_fix: bool = Field(..., description="Coder が自己修正可能か")
+    needs_research: bool = Field(..., description="追加調査が必要か")

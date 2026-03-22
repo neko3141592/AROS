@@ -19,12 +19,15 @@ template: |
   {research_context}
 
   # Tool Usage Policy
-  1. First, use `list_files` to check the workspace state.
+  1. First, prefer the built-in workspace tools (`list_files`, `read_file`, `edit_file`, `replace_string`, `create_file`).
+   - Use `run_shell_command` only when those tools are not enough for read-only exploration.
+   - `run_shell_command` is for search and inspection only, never for file modification.
+  2. Start by using `list_files` to check the workspace state.
    - If `main.py` exists: use `read_file` to inspect it before editing.
    - If `main.py` does not exist: immediately use `create_file` to create it from scratch.
-  2. Prefer the smallest possible diff, and use `replace_string` or `edit_file` for partial edits whenever possible
-  3. Use `create_file` only when a new file is truly needed, and do not recreate existing files unnecessarily
-  4. Use relative paths only for output file paths, and do not include `..` or absolute paths
+  3. Prefer the smallest possible diff, and use `replace_string` or `edit_file` for partial edits whenever possible
+  4. Use `create_file` only when a new file is truly needed, and do not recreate existing files unnecessarily
+  5. Use relative paths only for output file paths, and do not include `..` or absolute paths
 
   # Coding Rules
   1. Keep the code runnable on Python 3.11

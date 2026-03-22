@@ -29,6 +29,30 @@ def test_load_prompt_reads_planner_prompt() -> None:
     assert "task_title" in prompt.input_variables
 
 
+def test_load_prompt_reads_evaluator_prompt() -> None:
+    """
+    test_load_prompt_reads_evaluator_prompt を実行する。
+
+    Args:
+        なし。
+    """
+    prompt = load_prompt("system_evaluator")
+    assert prompt.name == "system_evaluator"
+    assert "stderr" in prompt.input_variables
+
+
+def test_load_prompt_reads_coder_prompt_with_shell_guidance() -> None:
+    """
+    test_load_prompt_reads_coder_prompt_with_shell_guidance を実行する。
+
+    Args:
+        なし。
+    """
+    prompt = load_prompt("system_coder")
+    assert prompt.name == "system_coder"
+    assert "run_shell_command" in prompt.template
+
+
 def test_render_prompt_formats_list_constraints() -> None:
     """
     test_render_prompt_formats_list_constraints を実行する。
@@ -111,3 +135,29 @@ def test_build_system_message_returns_langchain_message() -> None:
     )
     assert isinstance(message, SystemMessage)
     assert "MNIST分類" in message.content
+    assert "run_shell_command" in message.content
+
+
+def test_render_prompt_formats_evaluator_inputs() -> None:
+    """
+    test_render_prompt_formats_evaluator_inputs を実行する。
+
+    Args:
+        なし。
+    """
+    rendered = render_prompt(
+        "system_evaluator",
+        {
+            "task_title": "Transformer 実装",
+            "task_description": "最小修正で再実行する",
+            "return_code": 1,
+            "stdout": "",
+            "stderr": "NameError: name 'x' is not defined",
+            "base_summary": "name_or_type_error",
+            "base_likely_cause": "Variable name mismatch",
+            "base_suggested_fixes": ["Check the variable name"],
+        },
+    )
+    assert "Transformer 実装" in rendered
+    assert "NameError" in rendered
+    assert "- Check the variable name" in rendered

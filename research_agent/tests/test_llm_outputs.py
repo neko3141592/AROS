@@ -8,7 +8,11 @@ from pydantic import ValidationError
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from schema.llm_outputs import CoderOutput, PlannerOutput  # noqa: E402
+from schema.llm_outputs import (  # noqa: E402
+    CoderOutput,
+    EvaluatorAnalysisOutput,
+    PlannerOutput,
+)
 
 
 def test_planner_output_parses_valid_subtasks() -> None:
@@ -80,3 +84,21 @@ def test_coder_output_accepts_multi_file_map() -> None:
     result = CoderOutput(**payload)
     assert "main.py" in result.files
     assert "utils/helper.py" in result.files
+
+
+def test_evaluator_analysis_output_accepts_valid_payload() -> None:
+    """
+    test_evaluator_analysis_output_accepts_valid_payload を実行する。
+
+    Args:
+        なし。
+    """
+    payload = {
+        "likely_cause": "Variable was not defined.",
+        "suggested_fixes": ["Define it before use"],
+        "can_self_fix": True,
+        "needs_research": False,
+    }
+    result = EvaluatorAnalysisOutput(**payload)
+    assert result.can_self_fix is True
+    assert result.suggested_fixes == ["Define it before use"]

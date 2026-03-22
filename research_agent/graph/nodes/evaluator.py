@@ -1,16 +1,31 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import re
+from dataclasses import dataclass
+from json import JSONDecodeError
 from typing import Any, Dict
 
 from langchain_core.messages import AIMessage
-from dataclasses import dataclass
-from schema.task import ExperimentResult
-from tools.file_io import write_execution_log, write_meta
-from tools.local_executor import LocalExecutionResult, run_workspace_python
-from graph.state import AgentState, EvaluatorFeedback
+from pydantic import ValidationError
 
-import hashlib
-import re
+from graph.state import AgentState, EvaluatorFeedback
+from schema.llm_outputs import EvaluatorAnalysisOutput
+from schema.task import ExperimentResult, Task
+from tools.file_io import write_execution_log, write_meta
+from tools.llm_client import LLMClientError, generate_text
+from tools.local_executor import LocalExecutionResult, run_workspace_python
+from tools.prompt_manager import PromptManagerError, render_prompt
+
+DEFAULT_MODEL_NAME = "gpt-4o-mini"
+DEFAULT_EXECUTION_TIMEOUT_SEC = 60.0
+DEFAULT_MAX_TOTAL_EXECUTION_TIME_SEC = 180.0
+DEFAULT_LLM_ANALYSIS_TIMEOUT_SEC = 20.0
+# retry_count は 0 始まりで、3回目の失敗で停止する。
+MAX_SAME_ERROR_COUNT = 3
+MAX_RETRY_COUNT = 2
 
 @dataclass
 class FailureClassification:
@@ -19,6 +34,31 @@ class FailureClassification:
     suggested_fixes: list[str]
     can_self_fix: bool
     needs_research: bool
+
+@dataclass
+class EvaluatorDecision:
+    status: str
+    next_step: str
+    stop_reason: str | None
+    message: str
+
+
+def _read_positive_float_env(name: str, default: float) -> float:
+    """
+    正の浮動小数点設定値を環境変数から読み取る。
+
+    Args:
+        name: 環境変数名。
+        default: 未設定時の既定値。
+    """
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+
+    value = float(raw)
+    if value <= 0:
+        raise ValueError(f"{name} must be > 0.")
+    return value
 
 
 def _collect_workspace_file_list(run_paths: Any) -> list[str]:
@@ -122,11 +162,149 @@ def _build_error_signature(stderr: str, returncode: int) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
-def _build_evaluator_feedback(execution: LocalExecutionResult) -> EvaluatorFeedback:
+def _strip_code_fence(text: str) -> str:
+    """
+    LLM が返すコードフェンスを除去する。
+
+    Args:
+        text: 処理対象テキスト。
+    """
+    cleaned = text.strip()
+    if not cleaned:
+        return cleaned
+
+    lines = cleaned.splitlines()
+    if lines and lines[0].strip().startswith("```"):
+        lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        return "\n".join(lines).strip()
+
+    return cleaned
+
+
+def _extract_first_json_payload(text: str) -> Any:
+    """
+    文字列中の最初の JSON payload を取り出す。
+
+    Args:
+        text: 処理対象テキスト。
+    """
+    decoder = json.JSONDecoder()
+    for i, ch in enumerate(text):
+        if ch not in "[{":
+            continue
+        try:
+            obj, _ = decoder.raw_decode(text[i:])
+            return obj
+        except JSONDecodeError:
+            continue
+    raise JSONDecodeError("No valid JSON payload found in text.", text, 0)
+
+
+def _parse_evaluator_analysis_output(raw_text: str) -> EvaluatorAnalysisOutput:
+    """
+    Evaluator 用 LLM 解析出力をパースする。
+
+    Args:
+        raw_text: LLM の生テキスト。
+    """
+    cleaned = _strip_code_fence(raw_text)
+    payload = _extract_first_json_payload(cleaned)
+    if not isinstance(payload, dict):
+        raise ValueError("Evaluator analysis output must be a JSON object.")
+    return EvaluatorAnalysisOutput.model_validate(payload)
+
+
+def _should_use_evaluator_llm_analysis() -> bool:
+    """
+    Evaluator の LLM 解析を有効化すべきか判定する。
+    """
+    flag = (os.getenv("ENABLE_EVALUATOR_LLM_ANALYSIS") or "").strip().lower()
+    if flag in {"0", "false", "no", "off"}:
+        return False
+    return bool(os.getenv("OPENAI_API_KEY"))
+
+
+def _merge_feedback_with_llm_analysis(
+    base_feedback: EvaluatorFeedback,
+    analysis: EvaluatorAnalysisOutput,
+) -> EvaluatorFeedback:
+    """
+    LLM 解析結果でベースフィードバックを補強する。
+
+    Args:
+        base_feedback: ヒューリスティック由来のベースフィードバック。
+        analysis: LLM 解析結果。
+    """
+    return {
+        **base_feedback,
+        "likely_cause": analysis.likely_cause,
+        "suggested_fixes": analysis.suggested_fixes,
+        "can_self_fix": analysis.can_self_fix,
+        "needs_research": analysis.needs_research,
+    }
+
+
+def _analyze_failure_with_llm(
+    task: Task,
+    execution: LocalExecutionResult,
+    base_feedback: EvaluatorFeedback,
+) -> EvaluatorFeedback:
+    """
+    失敗解析を LLM で補強し、失敗時はベースフィードバックへフォールバックする。
+
+    Args:
+        task: 現在のタスク。
+        execution: ローカル実行結果。
+        base_feedback: ヒューリスティック分類結果。
+    """
+    if not _should_use_evaluator_llm_analysis():
+        return base_feedback
+
+    try:
+        system_prompt = render_prompt(
+            "system_evaluator",
+            {
+                "task_title": task.title,
+                "task_description": task.description,
+                "return_code": execution.returncode,
+                "stdout": execution.stdout or "(empty)",
+                "stderr": execution.stderr or "(empty)",
+                "base_summary": base_feedback.get("summary", ""),
+                "base_likely_cause": base_feedback.get("likely_cause", ""),
+                "base_suggested_fixes": base_feedback.get("suggested_fixes", []),
+            },
+        )
+        model_name = os.getenv("MODEL_NAME", DEFAULT_MODEL_NAME).strip() or DEFAULT_MODEL_NAME
+        raw_text = generate_text(
+            system_prompt=system_prompt,
+            user_prompt="Return only the JSON object.",
+            model=model_name,
+            temperature=0.0,
+            timeout=DEFAULT_LLM_ANALYSIS_TIMEOUT_SEC,
+        )
+        parsed = _parse_evaluator_analysis_output(raw_text)
+        return _merge_feedback_with_llm_analysis(base_feedback, parsed)
+    except (
+        PromptManagerError,
+        LLMClientError,
+        JSONDecodeError,
+        ValidationError,
+        ValueError,
+    ):
+        return base_feedback
+
+
+def _build_evaluator_feedback(
+    task: Task,
+    execution: LocalExecutionResult,
+) -> EvaluatorFeedback:
     """
     実行結果からCoderへ渡す構造化フィードバックを組み立てる。
 
     Args:
+        task: 現在のタスク。
         execution: ローカル実行の結果。
     """
     if execution.returncode == 0:
@@ -144,7 +322,7 @@ def _build_evaluator_feedback(execution: LocalExecutionResult) -> EvaluatorFeedb
 
     classification = _classify_failure(execution.stderr, execution.returncode)
     exception_line = _extract_exception_line(execution.stderr)
-    return {
+    feedback: EvaluatorFeedback = {
         "summary": classification.summary,
         "likely_cause": classification.likely_cause,
         "suggested_fixes": classification.suggested_fixes,
@@ -158,6 +336,11 @@ def _build_evaluator_feedback(execution: LocalExecutionResult) -> EvaluatorFeedb
             "returncode": execution.returncode,
         },
     }
+    return _analyze_failure_with_llm(
+        task=task,
+        execution=execution,
+        base_feedback=feedback,
+    )
 
 
 def _build_feedback_log_section(feedback: EvaluatorFeedback) -> str:
@@ -184,6 +367,65 @@ def _build_feedback_log_section(feedback: EvaluatorFeedback) -> str:
     )
 
 
+def _decide_next_action(
+    feedback: EvaluatorFeedback,
+    retry_count: int,
+    same_error_count: int,
+    total_execution_duration_sec: float,
+    max_total_execution_time_sec: float,
+) -> EvaluatorDecision:
+    if feedback["summary"] == "success":
+        return EvaluatorDecision(
+            "completed",
+            "done",
+            None,
+            "Evaluator: 実験は正常に完了しました。",
+        )
+
+    if total_execution_duration_sec >= max_total_execution_time_sec:
+        return EvaluatorDecision(
+            "failed",
+            "done",
+            "total_timeout",
+            (
+                f"{feedback['summary']}: 累積実行時間が "
+                f"{max_total_execution_time_sec:.1f}s を超えたため停止します。"
+            ),
+        )
+
+    if same_error_count >= MAX_SAME_ERROR_COUNT:
+        return EvaluatorDecision(
+            "failed",
+            "done",
+            "repeated_error",
+            f"{feedback['summary']}: 同一エラーが {same_error_count} 回連続で発生したため停止します。",
+        )
+
+    if retry_count >= MAX_RETRY_COUNT:
+        return EvaluatorDecision(
+            "failed",
+            "done",
+            "max_retry",
+            f"{feedback['summary']}: リトライ上限（{retry_count + 1}回）に達しました。",
+        )
+
+    if feedback.get("needs_research") or not feedback.get("can_self_fix", False):
+        return EvaluatorDecision(
+            "researching",
+            "researcher",
+            None,
+            f"{feedback['summary']}: 試行 {retry_count + 1}回目で失敗。Researcher に依頼します。",
+        )
+
+    return EvaluatorDecision(
+        "coding",
+        "coder",
+        None,
+        f"{feedback['summary']}: 試行 {retry_count + 1}回目で失敗。Coder に修正を依頼します。",
+    )
+
+
+
 def evaluator_node(state: AgentState) -> Dict[str, Any]:
     """
     Evaluatorノード（v0.2 ローカル実行版）。
@@ -202,6 +444,9 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
     task = state.get("task")
     run_paths = state.get("run_paths")
     retry_count = state.get("retry_count", 0)
+    previous_total_execution_duration_sec = float(
+        state.get("total_execution_duration_sec") or 0.0
+    )
 
     if not task:
         return {
@@ -217,14 +462,26 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
             "messages": [AIMessage(content="Evaluator failed: Missing run_paths.")],
         }
 
+    execution_timeout_sec = _read_positive_float_env(
+        "EXECUTION_TIMEOUT_SEC",
+        DEFAULT_EXECUTION_TIMEOUT_SEC,
+    )
+    max_total_execution_time_sec = _read_positive_float_env(
+        "MAX_TOTAL_EXECUTION_TIME_SEC",
+        DEFAULT_MAX_TOTAL_EXECUTION_TIME_SEC,
+    )
+
     # 2) ローカル実行
     execution = run_workspace_python(
         run_paths=run_paths,
         entrypoint="main.py",
-        timeout_sec=60,
+        timeout_sec=execution_timeout_sec,
     )
     is_success = execution.returncode == 0
-    feedback = _build_evaluator_feedback(execution)
+    feedback = _build_evaluator_feedback(task=task, execution=execution)
+    next_total_execution_duration_sec = (
+        previous_total_execution_duration_sec + execution.duration_sec
+    )
 
     if is_success:
         current_error_signature = None
@@ -245,6 +502,8 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
         "=== Local Execution ===\n"
         "Command: python main.py\n"
         f"Return Code: {execution.returncode}\n\n"
+        f"Duration Sec: {execution.duration_sec:.6f}\n"
+        f"Total Duration Sec: {next_total_execution_duration_sec:.6f}\n\n"
         "=== STDOUT ===\n"
         f"{execution.stdout.rstrip()}\n\n"
         "=== STDERR ===\n"
@@ -263,9 +522,13 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
     result = ExperimentResult(
         task_id=task.id,
         success=is_success,
-        metrics={},
+        metrics={
+            "execution_duration_sec": execution.duration_sec,
+            "total_execution_duration_sec": next_total_execution_duration_sec,
+        },
         logs=execution_log,
         error_message=error_message,
+        stop_reason=None,
     )
 
     # 4. 実行ログの保存
@@ -280,35 +543,15 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
 
     # 6. ステータスとリトライの判定
     # 成功したか、リトライ上限（例：3回）に達したか
-    if is_success:
-        new_status = "completed"
-        next_step = "done"
-        next_retry_count = retry_count
-        message_content = "Evaluator: 実験は正常に完了しました。成功としてマークします。"
-    elif retry_count >= 2:  # 0, 1, 2 の 3回目で終了
-        new_status = "failed"
-        next_step = "done"
-        next_retry_count = retry_count + 1
-        message_content = (
-            f"{feedback['summary']}: "
-            f"リトライ上限（{retry_count + 1}回）に達しました。実行を停止します。"
-        )
-    elif feedback.get("needs_research") or not feedback.get("can_self_fix", False):
-        new_status = "researching"
-        next_step = "researcher"
-        next_retry_count = retry_count + 1
-        message_content = (
-            f"{feedback['summary']}: "
-            f"試行 {retry_count + 1}回目で失敗。Researcher に追加調査を依頼します。"
-        )
-    else:
-        new_status = "coding"  # 失敗したがリトライ可能なら Coder に戻す
-        next_step = "coder"
-        next_retry_count = retry_count + 1
-        message_content = (
-            f"{feedback['summary']}: "
-            f"試行 {retry_count + 1}回目で失敗。Coder に修正を依頼します。"
-        )
+    decision = _decide_next_action(
+        feedback,
+        retry_count,
+        next_same_error_count,
+        next_total_execution_duration_sec,
+        max_total_execution_time_sec,
+    )
+    next_retry_count = retry_count if is_success else retry_count + 1
+    result = result.model_copy(update={"stop_reason": decision.stop_reason})
 
     # 7) Stateの更新
     return {
@@ -317,15 +560,17 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
         "execution_stdout": execution.stdout,
         "execution_stderr": execution.stderr,
         "execution_return_code": execution.returncode,
-        "status": new_status,
-        "current_step": next_step,
+        "last_execution_duration_sec": execution.duration_sec,
+        "total_execution_duration_sec": next_total_execution_duration_sec,
+        "status": decision.status,
+        "current_step": decision.next_step,
         "retry_count": next_retry_count,
         "evaluator_feedback": feedback,
         "error_signature": current_error_signature,
         "same_error_count": next_same_error_count,
-        "stop_reason": None,
+        "stop_reason": decision.stop_reason,
         "error": None if is_success else error_message,
-        "messages": [AIMessage(content=message_content)],
+        "messages": [AIMessage(content=decision.message)],
     }
 
 

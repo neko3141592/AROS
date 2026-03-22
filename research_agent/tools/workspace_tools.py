@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+import shlex
+import subprocess
 from pathlib import Path
 
 from tools.file_io import RunPaths
@@ -227,3 +230,72 @@ def replace_string(
 
     _write_text_atomic(target, updated)
     return _to_workspace_relative(run_paths, target)
+
+ALLOWED_COMMANDS = {
+    "cat",
+    "find",
+    "head",
+    "ls",
+    "pwd",
+    "rg",
+    "sed",
+    "tail",
+    "wc",
+}
+DENY_PATTERN = re.compile(r"(^|=)/|\.\.|\||&&|;|>|<")
+
+
+def run_shell_command(
+    run_paths: RunPaths,
+    command: str,
+    timeout_sec: float = 5.0,
+) -> str:
+    """
+    workspace 配下で read-only コマンドのみを安全に実行する。
+
+    Args:
+        run_paths: 実行ディレクトリ群を保持する RunPaths。
+        command: 実行するコマンド文字列。
+        timeout_sec: コマンド実行のタイムアウト秒数。
+    """
+    if timeout_sec <= 0:
+        raise ValueError("timeout_sec must be > 0.")
+    if not command or not command.strip():
+        raise ValueError("command must not be empty.")
+    if DENY_PATTERN.search(command):
+        raise ValueError("Command contains denied shell syntax or path traversal.")
+
+    try:
+        args = shlex.split(command)
+    except ValueError as exc:
+        raise ValueError(f"Command could not be parsed: {exc}") from exc
+
+    if not args:
+        raise ValueError("command must not be empty.")
+
+    cmd_name = args[0]
+    if cmd_name not in ALLOWED_COMMANDS:
+        raise ValueError(
+            f"Command '{cmd_name}' is not allowed. Allowed: {', '.join(sorted(ALLOWED_COMMANDS))}"
+        )
+
+    for arg in args:
+        if DENY_PATTERN.search(arg):
+            raise ValueError(f"Command argument contains denied content: {arg}")
+
+    try:
+        result = subprocess.run(
+            args,
+            cwd=run_paths.workspace_dir,
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+            shell=False,
+            check=False,
+        )
+        output_parts = [part.rstrip() for part in (result.stdout, result.stderr) if part]
+        if output_parts:
+            return "\n".join(output_parts)
+        return f"(exit code {result.returncode})"
+    except subprocess.TimeoutExpired:
+        return f"Error: command timed out after {timeout_sec} seconds."

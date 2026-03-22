@@ -33,3 +33,4 @@ class ExperimentResult(BaseModel):
     metrics: Dict[str, float] = Field(default_factory=dict, description="評価指標の辞書 (例: {'accuracy': 0.95, 'loss': 0.1})")
     logs: str = Field(default_factory=str, description="標準出力・標準エラー出力の結果")
     error_message: Optional[str] = Field(None, description="失敗時のエラーメッセージ")
+    stop_reason: Optional[str] = Field(None, description="停止理由 (max_retry, repeated_error, total_timeout など)")

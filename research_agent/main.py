@@ -155,6 +155,8 @@ def run_aros(
         "execution_stdout": None,
         "execution_stderr": None,
         "execution_return_code": None,
+        "last_execution_duration_sec": None,
+        "total_execution_duration_sec": 0.0,
         "retry_count": 0,
         "evaluator_feedback": None,
         "error_signature": None,

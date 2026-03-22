@@ -19,6 +19,7 @@ from tools.workspace_tools import (
     list_files as workspace_list_files,
     read_file as workspace_read_file,
     replace_string as workspace_replace_string,
+    run_shell_command as workspace_run_shell_command,
 )
 
 DEFAULT_MODEL_NAME = "gpt-4o-mini"
@@ -90,6 +91,23 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "run_shell_command",
+            "description": (
+                "Run an allowlisted read-only shell command inside workspace for exploration only."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "timeout_sec": {"type": "number"},
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "replace_string",
             "description": "Replace string in a file under workspace.",
             "parameters": {
@@ -114,6 +132,7 @@ TOOL_FUNCTIONS: Mapping[str, ToolFunction] = {
     "create_file": workspace_create_file,
     "edit_file": workspace_edit_file,
     "replace_string": workspace_replace_string,
+    "run_shell_command": workspace_run_shell_command,
 }
 
 def _strip_code_fence(text: str) -> str:

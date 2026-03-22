@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Any, Dict
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+import graph.nodes.evaluator as evaluator_mod  # noqa: E402
 from graph.nodes.evaluator import evaluator_node  # noqa: E402
 from schema.task import Task  # noqa: E402
 from tools.file_io import create_run_paths, read_execution_log, save_workspace_files  # noqa: E402
@@ -32,6 +34,8 @@ def _build_state(task: Task, run_paths: Any, retry_count: int = 0) -> Dict[str, 
         "execution_stdout": None,
         "execution_stderr": None,
         "execution_return_code": None,
+        "last_execution_duration_sec": None,
+        "total_execution_duration_sec": 0.0,
         "retry_count": retry_count,
         "evaluator_feedback": None,
         "error_signature": None,
@@ -73,6 +77,10 @@ def test_evaluator_marks_completed_on_success(tmp_path: Path) -> None:
     assert result["evaluator_feedback"]["summary"] == "success"
     assert result["error_signature"] is None
     assert result["same_error_count"] == 0
+    assert result["stop_reason"] is None
+    assert result["result"].stop_reason is None
+    assert result["last_execution_duration_sec"] is not None
+    assert result["total_execution_duration_sec"] is not None
     assert "=== STDOUT ===" in result["execution_logs"]
     assert "=== FEEDBACK ===" in result["execution_logs"]
     assert "summary: success" in result["execution_logs"]
@@ -113,6 +121,8 @@ def test_evaluator_returns_to_coder_on_failure(tmp_path: Path) -> None:
     assert result["evaluator_feedback"]["needs_research"] is False
     assert result["error_signature"] is not None
     assert result["same_error_count"] == 1
+    assert result["stop_reason"] is None
+    assert result["result"].stop_reason is None
     assert "=== FEEDBACK ===" in result["execution_logs"]
     assert "missing_name" in result["execution_stderr"]
 
@@ -148,6 +158,80 @@ def test_evaluator_increments_same_error_count_on_repeated_failure(tmp_path: Pat
     second = evaluator_node(second_state)
     assert second["same_error_count"] == 2
     assert second["error_signature"] == first["error_signature"]
+    assert second["stop_reason"] is None
+
+
+def test_evaluator_stops_on_repeated_same_error(tmp_path: Path) -> None:
+    """
+    test_evaluator_stops_on_repeated_same_error を実行する。
+
+    Args:
+        tmp_path: pytestの一時ディレクトリパス。
+    """
+    task = Task(
+        title="Evaluator Repeated Error Stop",
+        description="Stop after the same error repeats",
+        constraints=[],
+        subtasks=[],
+    )
+    run_paths = create_run_paths(task_id=task.id, base_dir=tmp_path)
+    save_workspace_files(
+        paths=run_paths,
+        files={"main.py": "raise RuntimeError('boom')\n"},
+    )
+
+    first_state = _build_state(task=task, run_paths=run_paths, retry_count=0)
+    first = evaluator_node(first_state)
+
+    second_state = _build_state(task=task, run_paths=run_paths, retry_count=1)
+    second_state["error_signature"] = first["error_signature"]
+    second_state["same_error_count"] = first["same_error_count"]
+    second = evaluator_node(second_state)
+
+    third_state = _build_state(task=task, run_paths=run_paths, retry_count=2)
+    third_state["error_signature"] = second["error_signature"]
+    third_state["same_error_count"] = second["same_error_count"]
+    third = evaluator_node(third_state)
+
+    assert third["status"] == "failed"
+    assert third["current_step"] == "done"
+    assert third["same_error_count"] == 3
+    assert third["stop_reason"] == "repeated_error"
+    assert third["result"].stop_reason == "repeated_error"
+    assert "同一エラーが 3 回連続" in third["messages"][0].content
+
+
+def test_evaluator_stops_on_max_retry_for_non_repeated_failures(tmp_path: Path) -> None:
+    """
+    test_evaluator_stops_on_max_retry_for_non_repeated_failures を実行する。
+
+    Args:
+        tmp_path: pytestの一時ディレクトリパス。
+    """
+    task = Task(
+        title="Evaluator Max Retry",
+        description="Stop after retry limit on changing errors",
+        constraints=[],
+        subtasks=[],
+    )
+    run_paths = create_run_paths(task_id=task.id, base_dir=tmp_path)
+    save_workspace_files(
+        paths=run_paths,
+        files={"main.py": "print(missing_name)\n"},
+    )
+
+    state = _build_state(task=task, run_paths=run_paths, retry_count=2)
+    state["error_signature"] = "different_signature"
+    state["same_error_count"] = 1
+
+    result = evaluator_node(state)
+
+    assert result["status"] == "failed"
+    assert result["current_step"] == "done"
+    assert result["retry_count"] == 3
+    assert result["stop_reason"] == "max_retry"
+    assert result["result"].stop_reason == "max_retry"
+    assert "リトライ上限（3回）" in result["messages"][0].content
 
 
 def test_evaluator_marks_module_not_found_as_needs_research(tmp_path: Path) -> None:
@@ -178,3 +262,125 @@ def test_evaluator_marks_module_not_found_as_needs_research(tmp_path: Path) -> N
     assert feedback["summary"] == "missing_module"
     assert feedback["needs_research"] is True
     assert feedback["can_self_fix"] is False
+    assert result["stop_reason"] is None
+
+
+def test_evaluator_stops_on_total_execution_timeout(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """
+    test_evaluator_stops_on_total_execution_timeout を実行する。
+
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+        tmp_path: pytestの一時ディレクトリパス。
+    """
+    task = Task(
+        title="Evaluator Total Timeout",
+        description="Stop when cumulative runtime exceeds the budget",
+        constraints=[],
+        subtasks=[],
+    )
+    run_paths = create_run_paths(task_id=task.id, base_dir=tmp_path)
+    state = _build_state(task=task, run_paths=run_paths, retry_count=1)
+    state["total_execution_duration_sec"] = 1.2
+
+    monkeypatch.setenv("MAX_TOTAL_EXECUTION_TIME_SEC", "3.0")
+    monkeypatch.setattr(
+        evaluator_mod,
+        "run_workspace_python",
+        lambda **_kwargs: evaluator_mod.LocalExecutionResult(
+            stdout="",
+            stderr="RuntimeError: boom",
+            returncode=1,
+            duration_sec=2.1,
+        ),
+    )
+
+    result = evaluator_mod.evaluator_node(state)
+
+    assert result["status"] == "failed"
+    assert result["current_step"] == "done"
+    assert result["stop_reason"] == "total_timeout"
+    assert result["result"].stop_reason == "total_timeout"
+    assert result["total_execution_duration_sec"] == 3.3
+
+
+def test_evaluator_uses_llm_analysis_when_enabled(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """
+    test_evaluator_uses_llm_analysis_when_enabled を実行する。
+
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+        tmp_path: pytestの一時ディレクトリパス。
+    """
+    task = Task(
+        title="Evaluator LLM Analysis",
+        description="Use LLM for better fixes",
+        constraints=[],
+        subtasks=[],
+    )
+    run_paths = create_run_paths(task_id=task.id, base_dir=tmp_path)
+    save_workspace_files(paths=run_paths, files={"main.py": "print(missing_name)\n"})
+    state = _build_state(task=task, run_paths=run_paths, retry_count=0)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        evaluator_mod,
+        "generate_text",
+        lambda **_kwargs: json.dumps(
+            {
+                "likely_cause": "The variable was never defined before use.",
+                "suggested_fixes": [
+                    "Define missing_name before printing it",
+                    "Re-read main.py and update only the failing line",
+                ],
+                "can_self_fix": True,
+                "needs_research": False,
+            }
+        ),
+    )
+
+    result = evaluator_mod.evaluator_node(state)
+    feedback = result["evaluator_feedback"]
+
+    assert feedback["likely_cause"] == "The variable was never defined before use."
+    assert feedback["suggested_fixes"][0] == "Define missing_name before printing it"
+    assert feedback["can_self_fix"] is True
+    assert feedback["needs_research"] is False
+
+
+def test_evaluator_falls_back_when_llm_analysis_fails(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """
+    test_evaluator_falls_back_when_llm_analysis_fails を実行する。
+
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+        tmp_path: pytestの一時ディレクトリパス。
+    """
+    task = Task(
+        title="Evaluator LLM Fallback",
+        description="Fallback to heuristic feedback",
+        constraints=[],
+        subtasks=[],
+    )
+    run_paths = create_run_paths(task_id=task.id, base_dir=tmp_path)
+    save_workspace_files(paths=run_paths, files={"main.py": "print(missing_name)\n"})
+    state = _build_state(task=task, run_paths=run_paths, retry_count=0)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        evaluator_mod,
+        "generate_text",
+        lambda **_kwargs: "not-json",
+    )
+
+    result = evaluator_mod.evaluator_node(state)
+    feedback = result["evaluator_feedback"]
+
+    assert feedback["summary"] == "name_or_type_error"
+    assert "Mismatched variable name" in feedback["likely_cause"]

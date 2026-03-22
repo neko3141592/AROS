@@ -49,6 +49,8 @@ class AgentState(TypedDict):
     execution_stdout: Optional[str]      # 実行時の標準出力
     execution_stderr: Optional[str]      # 実行時の標準エラー出力
     execution_return_code: Optional[int] # 実行時の終了コード
+    last_execution_duration_sec: Optional[float]   # 直近試行の実行時間
+    total_execution_duration_sec: Optional[float]  # 累積実行時間
     
     # --- 5. ファイル情報 ---
     run_paths: Optional[RunPaths]        # runごとの保存先情報（workspace_dir を含む）
@@ -82,6 +84,8 @@ def create_initial_state(task: Task) -> AgentState:
         "execution_stdout": None,
         "execution_stderr": None,
         "execution_return_code": None,
+        "last_execution_duration_sec": None,
+        "total_execution_duration_sec": 0.0,
         "run_paths": None,
         "retry_count": 0,
         "evaluator_feedback": None,

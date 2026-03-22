@@ -30,6 +30,7 @@ from tools.workspace_tools import (  # noqa: E402
     list_files as workspace_list_files,
     read_file as workspace_read_file,
     replace_string as workspace_replace_string,
+    run_shell_command as workspace_run_shell_command,
 )
 import tools.paper_search as paper_search  # noqa: E402
 
@@ -435,6 +436,52 @@ def test_workspace_tools_reject_parent_traversal(tmp_path: Path) -> None:
         workspace_list_files(paths, base_dir="../")
 
 
+def test_run_shell_command_supports_allowlisted_readonly_commands(
+    tmp_path: Path,
+) -> None:
+    """
+    test_run_shell_command_supports_allowlisted_readonly_commands を実行する。
+
+    Args:
+        tmp_path: pytestの一時ディレクトリパス。
+    """
+    paths = create_run_paths(task_id="task-005g", base_dir=tmp_path)
+    workspace_create_file(paths, "notes.txt", "alpha\nbeta\n")
+
+    output = workspace_run_shell_command(paths, "rg beta notes.txt")
+
+    assert "beta" in output
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_message"),
+    [
+        ("cat ../secret.txt", "denied"),
+        ("cat /etc/passwd", "denied"),
+        ("rg beta notes.txt | cat", "denied"),
+        ("cat notes.txt > out.txt", "denied"),
+    ],
+)
+def test_run_shell_command_rejects_unsafe_commands(
+    tmp_path: Path,
+    command: str,
+    expected_message: str,
+) -> None:
+    """
+    test_run_shell_command_rejects_unsafe_commands を実行する。
+
+    Args:
+        tmp_path: pytestの一時ディレクトリパス。
+        command: 実行対象コマンド。
+        expected_message: 期待するエラーメッセージ断片。
+    """
+    paths = create_run_paths(task_id="task-005h", base_dir=tmp_path)
+    workspace_create_file(paths, "notes.txt", "alpha\nbeta\n")
+
+    with pytest.raises(ValueError, match=expected_message):
+        workspace_run_shell_command(paths, command)
+
+
 def test_write_meta_persists_file_list(tmp_path: Path) -> None:
     """
     test_write_meta_persists_file_list を実行する。
@@ -490,6 +537,7 @@ def test_run_workspace_python_captures_outputs_and_returncode(tmp_path: Path) ->
     assert "hello stdout" in result.stdout
     assert "hello stderr" in result.stderr
     assert result.returncode == 3
+    assert result.duration_sec >= 0.0
 
 
 def test_run_workspace_python_returns_timeout_code(tmp_path: Path) -> None:
@@ -509,6 +557,7 @@ def test_run_workspace_python_returns_timeout_code(tmp_path: Path) -> None:
 
     assert result.returncode == 124
     assert "timed out" in result.stderr.lower()
+    assert result.duration_sec >= 0.0
 
 
 def test_build_arxiv_query_includes_keywords_and_categories() -> None:

@@ -1,48 +1,172 @@
-1. AgentState に自己修正用フィールドを追加する。  
-    編集: state.py  
-    追加候補: failure_summary, failure_fingerprint, stop_reason, evaluator_feedback。  
-    完了条件: Evaluatorが次回Coderに渡したい情報を state に保持できる。
-    進捗: 完了。`evaluator_feedback`, `error_signature`, `same_error_count`, `stop_reason` を保持できる。
-    
-2. Evaluator に失敗解析ロジックを追加する。  
-    編集: evaluator.py  
-    実装関数例: _summarize_failure(stderr, returncode), _fingerprint_failure(stderr, returncode)。  
-    分類方針例: ModuleNotFoundError, SyntaxError, AssertionError, Timeout, RuntimeError。  
-    完了条件: 実行失敗時に failure_summary と failure_fingerprint が必ず生成される。
-    進捗: 完了。失敗分類とエラーフィンガープリント生成が実装済み。
-    
-3. Evaluator の返却 payload に上記を含める。  
-    編集: evaluator.py  
-    return {...} に failure_summary, failure_fingerprint, evaluator_feedback, stop_reason を追加。  
-    完了条件: Coderノードが state から失敗要約を読める。
-    進捗: 完了。`evaluator_feedback`, `execution_stderr`, `error_signature`, `stop_reason` を state に返却している。
-    
-4. Coder の user prompt 構築に失敗コンテキストを注入する。  
-    編集: coder.py  
-    _build_user_prompt(...) または追加ヘルパーで、前回 execution_stderr と failure_summary を必ず入れる。  
-    完了条件: 2回目以降のCoderが「前回どこで失敗したか」を明示的に認識して修正する。
-    進捗: 完了。retry時は `summary / likely_cause / suggested_fixes / stderr` を prompt 先頭に注入する。
-    
-5. Coder システムプロンプトを自己修正向けに追記する。  
-    編集: system_coder.yaml  
-    追記内容例: 「前回の失敗要因を優先して修正」「無関係な変更を避ける」「必要ならツールで再確認」。  
-    完了条件: プロンプト仕様と実装（state注入）が一致する。
-    進捗: 一部未完。自己修正ルールは `coder.py` の user prompt 側で補完済みだが、`system_coder.yaml` 本体の整理は未反映。
-    
-6. 停止条件の最小版を入れる。  
-    編集: evaluator.py, edges.py  
-    まずは max_retry と「同一 fingerprint の連続回数」で停止。  
-    完了条件: 同じ失敗を無限に繰り返さない。
-    進捗: 一部未完。`max_retry` と fingerprint 検知はあるが、同一 fingerprint 反復での停止条件は未実装。
-    
-7. テストを追加する。  
-    編集: test_evaluator.py, test_nodes_llm.py  
-    追加ケース: 失敗解析がstateへ入る、同一エラー反復で停止、2回目で修正成功。  
-    完了条件: self-correction の最小統合テストが通る。
-    進捗: 一部完了。失敗解析・retry prompt・2回目で修正成功のテストは追加済み。同一エラー反復停止テストは未完。
-    
-8. v0.2b の未更新チェックを整理してから v0.2c に移る。  
-    編集: roadmap_v0.2b.md, roadmap_v0.2c.md  
-    v0.2b-5 は「テスト追加済み」の項目を更新。  
-    完了条件: ロードマップと実装状態が一致する。
-    進捗: 進行中。v0.2c 側は今回の自己修正ループ進捗を反映、v0.2b 側の未完テスト項目は継続管理。
+**1. 停止理由を AgentState / result に明示記録**  
+編集先:  
+task.py  
+state.py  
+evaluator.py
+
+やること:
+
+- ExperimentResult に stop_reason: Optional[str] を追加する
+- AgentState に必要なら
+    - last_execution_duration_sec
+    - total_execution_duration_sec  
+        を追加する
+- evaluator_node() の result = ExperimentResult(...) に stop_reason=decision.stop_reason を入れる
+- state return にも
+    - "stop_reason": decision.stop_reason
+    - "last_execution_duration_sec": execution.duration_sec
+    - "total_execution_duration_sec": next_total_execution_duration_sec  
+        を返す
+
+ポイント:
+
+- stop_reason は None | "max_retry" | "repeated_error" | "total_timeout" くらいで十分です
+- 成功時は None のままでOKです
+
+**2. timeout 制御を仕上げる**  
+編集先:  
+local_executor.py  
+evaluator.py  
+main.py
+
+やること:
+
+- LocalExecutionResult に duration_sec: float を追加する
+- run_workspace_python() で time.monotonic() を使って実行時間を測る
+- evaluator.py に定数を置く
+    - DEFAULT_EXECUTION_TIMEOUT_SEC = 60.0
+    - DEFAULT_MAX_TOTAL_EXECUTION_TIME_SEC = 180.0
+- env から読めるようにする
+    - EXECUTION_TIMEOUT_SEC
+    - MAX_TOTAL_EXECUTION_TIME_SEC
+- run_workspace_python(... timeout_sec=per_try_timeout) に差し替える
+- state["total_execution_duration_sec"] を累積し、閾値超過なら failed/done/stop_reason="total_timeout" にする
+
+実装の形:
+
+- 1試行 timeout は subprocess.run(..., timeout=...) で止める
+- 全体 timeout は Evaluator 側で累積時間を見て止める
+
+判定順はこれが安全です:
+
+1. success
+2. total_timeout
+3. repeated_error
+4. max_retry
+5. needs_research
+6. coder retry
+
+**3. Evaluator の LLM解析を入れる**  
+編集先:  
+evaluator.py  
+llm_outputs.py  
+prompt_manager.py  
+新規:  
+system_evaluator.yaml
+
+おすすめ実装:
+
+- まず今の _classify_failure() を残す
+- その結果をベースに、失敗時だけ LLM で
+    - likely_cause
+    - suggested_fixes
+    - can_self_fix
+    - needs_research  
+        を補強する
+- LLM が失敗したら必ず今のヒューリスティックへフォールバックする
+
+流れ:
+
+1. _classify_failure() で base を作る
+2. _analyze_failure_with_llm(...) を呼ぶ
+3. JSON を parse できたら base に merge
+4. 失敗したら base をそのまま返す
+
+おすすめのガード:
+
+- OPENAI_API_KEY が無いときは LLM解析しない
+- ENABLE_EVALUATOR_LLM_ANALYSIS=0 でも無効化できるようにする
+
+プロンプト入力はこれで十分です:
+
+- task title
+- task description
+- return code
+- stdout
+- stderr
+- base summary
+- base likely cause
+- base suggested fixes
+
+**4. run_shell_command を追加して Coder プロンプトを合わせる**  
+編集先:  
+workspace_tools.py  
+coder.py  
+system_coder.yaml
+
+おすすめ実装:
+
+- workspace_tools.py に run_shell_command(run_paths, command, timeout_sec=5.0) を追加
+- shell=True は使わない
+- shlex.split() して allowlist command のみ許可する
+- cwd=run_paths.workspace_dir で実行する
+- 読み取り系だけ許可する
+    - rg
+    - ls
+    - find
+    - cat
+    - head
+    - tail
+    - wc
+    - pwd
+    - sed
+- 拒否するもの
+    - 絶対パス
+    - ..
+    - |
+    - &&
+    - ;
+    - >
+    - <
+
+coder.py では:
+
+- TOOL_SCHEMAS に run_shell_command を追加
+- TOOL_FUNCTIONS にも追加
+
+system_coder.yaml では:
+
+- まず built-in tools を優先
+- 必要なら run_shell_command で read-only に探索
+- 変更操作には使わない  
+    を明記すれば十分です
+
+**5. 先に足すべきテスト**  
+編集先:  
+test_evaluator.py  
+test_tools.py  
+test_prompt_manager.py  
+test_nodes_llm.py
+
+最低限ほしいケース:
+
+- ExperimentResult.stop_reason が max_retry / repeated_error / total_timeout で埋まる
+- total_execution_duration_sec 超過で停止する
+- LLM解析成功時に suggested_fixes が上書きされる
+- LLM解析失敗時にヒューリスティックへフォールバックする
+- run_shell_command が rg などを実行できる
+- run_shell_command が ../, absolute path, pipe/redirect を拒否する
+- system_evaluator.yaml が load/render できる
+- system_coder.yaml に run_shell_command が入っている
+
+**6. 最後に roadmap を更新**  
+編集先:  
+roadmap_v0.2c.md
+
+更新する項目:
+
+- 実行タイムアウト（1試行あたり / 全体）の停止制御
+- 停止理由を AgentState / result に明示的に記録
+- LLMで実行エラーを解析し、具体的な修正指示を生成
+- Coder のシステムプロンプトに ... run_shell_command ...
+- 関連テスト項目

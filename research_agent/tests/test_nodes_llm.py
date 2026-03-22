@@ -37,6 +37,8 @@ def _build_state(task: Task, run_paths: Any = None) -> Dict[str, Any]:
         "execution_stdout": None,
         "execution_stderr": None,
         "execution_return_code": None,
+        "last_execution_duration_sec": None,
+        "total_execution_duration_sec": 0.0,
         "retry_count": 0,
         "evaluator_feedback": None,
         "error_signature": None,
@@ -234,6 +236,81 @@ def test_coder_uses_workspace_as_source_of_truth(
     assert result["current_step"] == "evaluator"
     assert result["generated_code"] == "print('from workspace')\n"
     assert result["generated_files"]["main.py"] == "print('from workspace')\n"
+
+
+def test_coder_registers_run_shell_command_tool() -> None:
+    """
+    test_coder_registers_run_shell_command_tool を実行する。
+
+    Args:
+        なし。
+    """
+    tool_names = [tool["function"]["name"] for tool in coder_mod.TOOL_SCHEMAS]
+
+    assert "run_shell_command" in tool_names
+    assert "run_shell_command" in coder_mod.TOOL_FUNCTIONS
+
+
+def test_coder_can_use_run_shell_command_for_readonly_exploration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """
+    test_coder_can_use_run_shell_command_for_readonly_exploration を実行する。
+
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+        tmp_path: pytestの一時ディレクトリパス。
+    """
+    task = Task(
+        title="Coder Shell Tool",
+        description="Use shell exploration before editing",
+        constraints=["local"],
+        subtasks=[],
+    )
+    run_paths = create_run_paths(task_id=task.id, base_dir=tmp_path)
+    save_workspace_files(
+        paths=run_paths,
+        files={
+            "main.py": "print('ok')\n",
+            "notes.txt": "shell-guided context\n",
+        },
+    )
+    state = _build_state(task, run_paths=run_paths)
+    state["research_context"] = "Inspect notes if needed, but edit only workspace files."
+
+    captured_prompts: list[str] = []
+
+    def _fake_generate_with_tools(**kwargs: Any) -> Dict[str, Any]:
+        captured_prompts.append(kwargs["user_prompt"])
+        if len(captured_prompts) == 1:
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "function": {
+                            "name": "run_shell_command",
+                            "arguments": json.dumps({"command": "rg shell-guided notes.txt"}),
+                        },
+                    }
+                ],
+            }
+
+        return {
+            "content": json.dumps({"files": {"main.py": "print('still ok')\n"}}),
+            "tool_calls": [],
+        }
+
+    monkeypatch.setattr(coder_mod, "generate_with_tools", _fake_generate_with_tools)
+
+    result = coder_mod.coder_node(state)
+
+    assert result["status"] == "coding"
+    assert result["current_step"] == "evaluator"
+    assert result["generated_code"] == "print('still ok')\n"
+    assert len(captured_prompts) == 2
+    assert "# Tool Execution History" in captured_prompts[1]
+    assert "run_shell_command" in captured_prompts[1]
 
 
 def test_coder_includes_failure_context_in_retry_prompts(
