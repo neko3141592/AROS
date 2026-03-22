@@ -62,7 +62,7 @@ def _serialize_run_paths(run_paths: RunPaths) -> Dict[str, Any]:
 def _read_workspace_main_code(run_paths: RunPaths) -> str:
     """
     workspace の main.py を読み込む。
-    workspace に無ければ run_dir 側の code_path を読む。
+    workspace に無ければ code_path を読む。
     
     Args:
         run_paths: 対象runのパス情報。
@@ -156,6 +156,10 @@ def run_aros(
         "execution_stderr": None,
         "execution_return_code": None,
         "retry_count": 0,
+        "evaluator_feedback": None,
+        "error_signature": None,
+        "same_error_count": 0,
+        "stop_reason": None,
         "result": None,
         "run_paths": run_paths,
         "error": None,
@@ -207,8 +211,6 @@ if __name__ == "__main__":
     if len(sys.argv) > 4:
         parent_run_id_arg = sys.argv[4]
 
-    
-        
     run_aros(
         title,
         desc,

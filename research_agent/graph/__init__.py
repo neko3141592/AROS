@@ -46,6 +46,7 @@ def create_research_graph():
         should_continue,
         {
             "coder": "coder",   # 失敗時は Coder に戻る
+            "researcher": "researcher",  # 知識補充が必要なら Researcher に戻る
             "done": END         # 完了時はグラフを終了する
         }
     )

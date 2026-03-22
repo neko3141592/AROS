@@ -1,4 +1,0 @@
-Traceback: ZeroDivisionError at line 42
-Epoch 1: loss=0.5, acc=0.8
-Epoch 2: loss=0.3, acc=0.9
-Optimization finished successfully.

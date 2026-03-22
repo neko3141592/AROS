@@ -1,8 +1,25 @@
-from typing import TypedDict, Annotated, Dict, List, Optional
+from typing import Any, TypedDict, Annotated, Dict, List, Optional
 import operator
 from langchain_core.messages import BaseMessage
 from schema.task import Task, ExperimentResult
 from tools.file_io import RunPaths
+
+
+class EvaluatorFeedback(TypedDict, total=False):
+    """
+    EvaluatorからCoderへ渡す自己修正用のフィードバック。
+    """
+
+    summary: str
+    likely_cause: str
+    suggested_fixes: List[str]
+    can_self_fix: bool
+    needs_research: bool
+    return_code: int
+    stdout: str
+    stderr: str
+    raw: Dict[str, Any]
+
 
 class AgentState(TypedDict):
     """
@@ -25,7 +42,7 @@ class AgentState(TypedDict):
     
     # --- 4. 生成物・実験データ ---
     # 正本は run_paths.workspace_dir 上の実ファイル。
-    # generated_* は後方互換のための mirror（参照元は workspace）として保持する。
+    # generated_* は後方互換のための state mirror として保持する。
     generated_code: Optional[str]
     generated_files: Optional[Dict[str, str]]
     execution_logs: Optional[str]        # 実験の実行ログ
@@ -33,11 +50,15 @@ class AgentState(TypedDict):
     execution_stderr: Optional[str]      # 実行時の標準エラー出力
     execution_return_code: Optional[int] # 実行時の終了コード
     
-    # --- 6. ファイル情報 ---
+    # --- 5. ファイル情報 ---
     run_paths: Optional[RunPaths]        # runごとの保存先情報（workspace_dir を含む）
 
-    # --- 5. 結果と自己修復制御 ---
+    # --- 6. 結果と自己修復制御 ---
     retry_count: int                     # エラー発生時のリトライ回数
+    evaluator_feedback: Optional[EvaluatorFeedback]  # Evaluatorの構造化フィードバック
+    error_signature: Optional[str]       # 同一エラー判定用のフィンガープリント
+    same_error_count: int                # 同一エラーの連続発生回数
+    stop_reason: Optional[str]           # 停止理由（max_retry, repeated_errorなど）
     result: Optional[ExperimentResult]
     error: Optional[str]
 
@@ -63,6 +84,10 @@ def create_initial_state(task: Task) -> AgentState:
         "execution_return_code": None,
         "run_paths": None,
         "retry_count": 0,
+        "evaluator_feedback": None,
+        "error_signature": None,
+        "same_error_count": 0,
+        "stop_reason": None,
         "status": "pending",
         "result": None,
         "error": None,

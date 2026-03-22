@@ -10,6 +10,7 @@ import pytest
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 import graph.nodes.coder as coder_mod  # noqa: E402
+import graph.nodes.evaluator as evaluator_mod  # noqa: E402
 import graph.nodes.planner as planner_mod  # noqa: E402
 import graph.nodes.researcher as researcher_mod  # noqa: E402
 from schema.task import Task  # noqa: E402
@@ -37,6 +38,10 @@ def _build_state(task: Task, run_paths: Any = None) -> Dict[str, Any]:
         "execution_stderr": None,
         "execution_return_code": None,
         "retry_count": 0,
+        "evaluator_feedback": None,
+        "error_signature": None,
+        "same_error_count": 0,
+        "stop_reason": None,
         "result": None,
         "run_paths": run_paths,
         "error": None,
@@ -185,6 +190,8 @@ def test_coder_saves_workspace_files(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     assert "generated_files" in result
     assert "analysis/run.py" in result["generated_files"]
     assert run_paths.code_path.read_text(encoding="utf-8") == result["generated_code"]
+    assert run_paths.code_path == run_paths.workspace_dir / "main.py"
+    assert not (run_paths.run_dir / "main.py").exists()
     assert (
         run_paths.workspace_dir / "analysis" / "run.py"
     ).read_text(encoding="utf-8") == "print('analysis')\n"
@@ -227,3 +234,181 @@ def test_coder_uses_workspace_as_source_of_truth(
     assert result["current_step"] == "evaluator"
     assert result["generated_code"] == "print('from workspace')\n"
     assert result["generated_files"]["main.py"] == "print('from workspace')\n"
+
+
+def test_coder_includes_failure_context_in_retry_prompts(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """
+    test_coder_includes_failure_context_in_retry_prompts を実行する。
+
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+        tmp_path: pytestの一時ディレクトリパス。
+    """
+    task = Task(
+        title="Coder Retry Context",
+        description="Retry with previous failure context",
+        constraints=["local"],
+        subtasks=[],
+    )
+    run_paths = create_run_paths(task_id=task.id, base_dir=tmp_path)
+    state = _build_state(task, run_paths=run_paths)
+    state["research_context"] = "Fix only the previous execution failure."
+    state["retry_count"] = 1
+    state["execution_stderr"] = (
+        "Traceback (most recent call last):\n"
+        "  File \"main.py\", line 1, in <module>\n"
+        "    print(missing_name)\n"
+        "NameError: name 'missing_name' is not defined\n"
+    )
+    state["evaluator_feedback"] = {
+        "summary": "name_or_type_error",
+        "likely_cause": "Mismatched variable name, attribute, or type.",
+        "suggested_fixes": [
+            "Check for typos in variable names",
+            "Verify types (e.g. str vs int)",
+        ],
+        "can_self_fix": True,
+        "needs_research": False,
+        "return_code": 1,
+        "stdout": "",
+        "stderr": state["execution_stderr"],
+        "raw": {},
+    }
+
+    captured_prompts: list[str] = []
+
+    def _fake_generate_with_tools(**kwargs: Any) -> Dict[str, Any]:
+        captured_prompts.append(kwargs["user_prompt"])
+        if len(captured_prompts) == 1:
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "function": {
+                            "name": "list_files",
+                            "arguments": json.dumps(
+                                {"base_dir": ".", "recursive": True}
+                            ),
+                        },
+                    }
+                ],
+            }
+        return {
+            "content": json.dumps({"files": {"main.py": "print('fixed')\n"}}),
+            "tool_calls": [],
+        }
+
+    monkeypatch.setattr(coder_mod, "generate_with_tools", _fake_generate_with_tools)
+
+    result = coder_mod.coder_node(state)
+
+    assert result["status"] == "coding"
+    assert result["current_step"] == "evaluator"
+    assert len(captured_prompts) == 2
+    assert captured_prompts[0].splitlines()[0] == "summary: name_or_type_error"
+    for prompt in captured_prompts:
+        assert "前回失敗の直接原因を最優先で修正" in prompt
+        assert "無関係な変更は行わないでください" in prompt
+        assert "summary: name_or_type_error" in prompt
+        assert "read_file(main.py)" in prompt
+        assert "likely_cause: Mismatched variable name, attribute, or type." in prompt
+        assert "- Check for typos in variable names" in prompt
+        assert state["execution_stderr"].rstrip() in prompt
+    assert "# Tool Execution History" not in captured_prompts[0]
+    assert "# Tool Execution History" in captured_prompts[1]
+
+
+def test_retry_loop_reaches_success_after_coder_fix(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """
+    test_retry_loop_reaches_success_after_coder_fix を実行する。
+
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+        tmp_path: pytestの一時ディレクトリパス。
+    """
+    task = Task(
+        title="Retry Loop Success",
+        description="Failure is fixed by coder on retry",
+        constraints=["local"],
+        subtasks=[],
+    )
+    run_paths = create_run_paths(task_id=task.id, base_dir=tmp_path)
+    save_workspace_files(
+        paths=run_paths,
+        files={"main.py": "print(missing_name)\n"},
+    )
+    base_state = _build_state(task, run_paths=run_paths)
+    base_state["research_context"] = "Fix only the failing line in main.py."
+
+    failed_eval_state = evaluator_mod.evaluator_node(base_state)
+
+    assert failed_eval_state["status"] == "coding"
+    assert failed_eval_state["current_step"] == "coder"
+    assert failed_eval_state["retry_count"] == 1
+    assert failed_eval_state["evaluator_feedback"]["summary"] == "name_or_type_error"
+
+    captured_prompts: list[str] = []
+    llm_call_count = 0
+
+    def _fake_generate_with_tools(**kwargs: Any) -> Dict[str, Any]:
+        nonlocal llm_call_count
+        llm_call_count += 1
+        prompt = kwargs["user_prompt"]
+        captured_prompts.append(prompt)
+
+        assert prompt.splitlines()[0] == "summary: name_or_type_error"
+        assert "read_file(main.py)" in prompt
+
+        if llm_call_count == 1:
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": json.dumps({"file_path": "main.py"}),
+                        },
+                    }
+                ],
+            }
+
+        return {
+            "content": json.dumps(
+                {
+                    "files": {
+                        "main.py": (
+                            "missing_name = 'ok'\n"
+                            "print(missing_name)\n"
+                        )
+                    }
+                }
+            ),
+            "tool_calls": [],
+        }
+
+    monkeypatch.setattr(coder_mod, "generate_with_tools", _fake_generate_with_tools)
+
+    coder_input_state = {**base_state, **failed_eval_state}
+    coder_result = coder_mod.coder_node(coder_input_state)
+
+    assert coder_result["status"] == "coding"
+    assert coder_result["current_step"] == "evaluator"
+    assert coder_result["generated_code"] == "missing_name = 'ok'\nprint(missing_name)\n"
+    assert len(captured_prompts) == 2
+    assert "# Tool Execution History" not in captured_prompts[0]
+    assert "# Tool Execution History" in captured_prompts[1]
+
+    success_eval_input = {**coder_input_state, **coder_result}
+    success_eval_state = evaluator_mod.evaluator_node(success_eval_input)
+
+    assert success_eval_state["status"] == "completed"
+    assert success_eval_state["current_step"] == "done"
+    assert success_eval_state["result"].success is True
+    assert success_eval_state["execution_stdout"].strip() == "ok"
+    assert success_eval_state["evaluator_feedback"]["summary"] == "success"

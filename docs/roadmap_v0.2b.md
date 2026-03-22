@@ -33,11 +33,11 @@ v0.2aの動作基準点を維持しながら、段階的に差し替えてリグ
 - [x] 既存の単発実行フロー（project未指定時）との後方互換を維持
 
 ## 5. 回帰防止テスト
-- [ ] `tests/test_tools.py` に `workspace_tools.py` の単体テスト追加
+- [x] `tests/test_tools.py` に `workspace_tools.py` の単体テスト追加
 - [ ] v0.2aの既存ケースが破壊されないことを確認する回帰テスト
 - [ ] Coderが最小差分で修正できることの統合テスト
-- [ ] 同一 `project_id` で複数runを連続実行し、Workspace継承が正しく働くテスト
-- [ ] `parent_run_id` 不正時の安全なフォールバック（新規Workspace作成）テスト
+- [x] 同一 `project_id` で複数runを連続実行し、Workspace継承が正しく働くテスト
+- [x] `parent_run_id` 不正時の安全なフォールバック（新規Workspace作成）テスト
 
 ## 完了条件
 1. Coderがワークスペースを探索し、必要部分だけを複数ステップで編集できる。  

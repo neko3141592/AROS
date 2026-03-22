@@ -10,6 +10,38 @@ class LLMClientError(Exception):
     """LLM呼び出し失敗時に投げる統一例外。"""
 
 
+def _normalize_tool_call(tool_call: Any) -> dict[str, Any]:
+    """
+    LiteLLM が返す tool_call を coder が扱える辞書形式へ正規化する。
+
+    Args:
+        tool_call: provider / LiteLLM が返すツール呼び出しオブジェクト。
+    """
+    if isinstance(tool_call, dict):
+        normalized = tool_call
+    elif hasattr(tool_call, "model_dump"):
+        normalized = tool_call.model_dump()
+    else:
+        function = getattr(tool_call, "function", None)
+        normalized = {
+            "id": getattr(tool_call, "id", ""),
+            "type": getattr(tool_call, "type", "function"),
+            "function": {
+                "name": getattr(function, "name", None),
+                "arguments": getattr(function, "arguments", None),
+            },
+        }
+
+    if not isinstance(normalized, dict):
+        raise LLMClientError("LLM returned invalid tool_call payload.")
+
+    function_payload = normalized.get("function")
+    if not isinstance(function_payload, dict):
+        raise LLMClientError("LLM returned tool_call without function payload.")
+
+    return normalized
+
+
 def _extract_text_from_response(response: Any) -> str:
     """
     LiteLLMレスポンスから最初のテキストを安全に取り出す。
@@ -57,9 +89,11 @@ def _extract_tool_response(response: Any) -> dict[str, Any]:
     if not content_text.strip() and not tool_calls:
         raise LLMClientError("LLM returned neither content nor tool_calls.")
 
+    normalized_tool_calls = [_normalize_tool_call(tool_call) for tool_call in tool_calls]
+
     return {
         "content": content_text,
-        "tool_calls": tool_calls,
+        "tool_calls": normalized_tool_calls,
     }
 
 

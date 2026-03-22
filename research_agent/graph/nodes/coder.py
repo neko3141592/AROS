@@ -116,7 +116,6 @@ TOOL_FUNCTIONS: Mapping[str, ToolFunction] = {
     "replace_string": workspace_replace_string,
 }
 
-
 def _strip_code_fence(text: str) -> str:
     """
     _strip_code_fence を実行する。
@@ -174,23 +173,68 @@ def _parse_coder_output(raw_text: str) -> CoderOutput:
     return CoderOutput.model_validate(payload)
 
 
-def _build_user_prompt(base_instruction: str, observations: list[str]) -> str:
+def _build_failure_context(
+    evaluator_feedback: Mapping[str, Any] | None,
+    execution_stderr: str | None,
+    retry_count: int,
+) -> str:
+    """
+    再試行時に Coder へ渡す失敗コンテキストを組み立てる。
+
+    Args:
+        evaluator_feedback: Evaluator の構造化フィードバック。
+        execution_stderr: 実行時の標準エラー出力。
+        retry_count: 現在のリトライ回数。
+    """
+    if retry_count <= 0:
+        return ""
+
+    feedback = evaluator_feedback or {}
+    summary = str(feedback.get("summary") or "unknown_failure")
+    likely_cause = str(feedback.get("likely_cause") or "")
+    suggested_fixes = feedback.get("suggested_fixes") or []
+    fixes_text = "\n".join(f"- {item}" for item in suggested_fixes) if suggested_fixes else "- (none)"
+    stderr_text = (execution_stderr or str(feedback.get("stderr") or "")).rstrip() or "(empty)"
+
+    return (
+        f"summary: {summary}\n"
+        "# Previous Failure Context\n"
+        "前回失敗の直接原因を最優先で修正し、無関係な変更は行わないでください。\n"
+        "失敗時は最初のツール呼び出しとして必ず read_file(main.py) を実行し、"
+        "現在の main.py を確認してから編集してください。\n"
+        f"likely_cause: {likely_cause}\n"
+        "suggested_fixes:\n"
+        f"{fixes_text}\n"
+        "stderr:\n"
+        f"{stderr_text}"
+    )
+
+
+def _build_user_prompt(
+    base_instruction: str,
+    observations: list[str],
+    failure_context: str = "",
+) -> str:
     """
     _build_user_prompt を実行する。
     
     Args:
         base_instruction: Coder に渡す基本指示文。
         observations: ツール実行結果の履歴。
+        failure_context: 再試行時に優先すべき失敗コンテキスト。
     """
-    if not observations:
-        return base_instruction
-    return (
-        f"{base_instruction}\n\n"
-        "# Tool Execution History\n"
-        "以下は直近のツール実行結果です。必要なら追加でツールを呼び出し、"
-        "完了したら最終JSONのみ返してください。\n\n"
-        + "\n\n".join(observations)
-    )
+    prompt_parts: list[str] = []
+    if failure_context:
+        prompt_parts.append(failure_context)
+    prompt_parts.append(base_instruction)
+    if observations:
+        prompt_parts.append(
+            "# Tool Execution History\n"
+            "以下は直近のツール実行結果です。必要なら追加でツールを呼び出し、"
+            "完了したら最終JSONのみ返してください。\n\n"
+            + "\n\n".join(observations)
+        )
+    return "\n\n".join(prompt_parts)
 
 
 def _parse_tool_arguments(raw_arguments: Any) -> dict[str, Any]:
@@ -270,7 +314,7 @@ def _load_workspace_files(run_paths: Any) -> dict[str, str]:
 def _build_workspace_state_payload(run_paths: Any) -> dict[str, Any]:
     """
     workspace を正本として state へ返す payload を作る。
-    generated_* は後方互換のために mirror として埋める。
+    generated_* は後方互換のために state mirror として埋める。
     
     Args:
         run_paths: 実行ディレクトリ群を保持する RunPaths。
@@ -326,10 +370,13 @@ def coder_node(state: AgentState) -> Dict[str, Any]:
         )
         base_user_prompt = (
             "提供されたツールを使って workspace を探索・編集し、タスクを満たしてください。"
+            "前回失敗の直接原因を最優先で修正し、無関係な変更は行わないでください。"
             "必要な場合のみツールを呼び出し、最終的に完了したら JSON のみ返してください。"
             "最終出力は必ず次の形式です: "
             '{"files":{"main.py":"<updated python code>", "<other_changed_file>":"<updated text>"}}。'
             "説明文やMarkdownは出力しないでください。"
+            "失敗時は、最初のツール呼び出しとして必ず read_file(main.py) を実行し、"
+            "現在の main.py を確認してから edit_file/create_file/replace_string を行ってください。"
         )
 
         model_name = (
@@ -342,9 +389,18 @@ def coder_node(state: AgentState) -> Dict[str, Any]:
         if max_tool_steps < 1:
             raise ValueError("MAX_TOOL_STEPS must be >= 1.")
 
+        failure_context = _build_failure_context(
+            evaluator_feedback=state.get("evaluator_feedback"),
+            execution_stderr=state.get("execution_stderr"),
+            retry_count=state.get("retry_count", 0),
+        )
         observations: list[str] = []
         for step in range(max_tool_steps):
-            user_prompt = _build_user_prompt(base_user_prompt, observations)
+            user_prompt = _build_user_prompt(
+                base_user_prompt,
+                observations,
+                failure_context=failure_context,
+            )
             response = generate_with_tools(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
@@ -354,6 +410,8 @@ def coder_node(state: AgentState) -> Dict[str, Any]:
                 temperature=0.2,
                 timeout=60,
             )
+
+            print(f'LLM RESPONSE IS {response}')
 
             tool_calls = response.get("tool_calls") or []
             content = (response.get("content") or "").strip()

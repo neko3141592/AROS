@@ -3,10 +3,22 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from langchain_core.messages import AIMessage
+from dataclasses import dataclass
 from schema.task import ExperimentResult
 from tools.file_io import write_execution_log, write_meta
-from tools.local_executor import run_workspace_python
-from graph.state import AgentState
+from tools.local_executor import LocalExecutionResult, run_workspace_python
+from graph.state import AgentState, EvaluatorFeedback
+
+import hashlib
+import re
+
+@dataclass
+class FailureClassification:
+    summary: str
+    likely_cause: str
+    suggested_fixes: list[str]
+    can_self_fix: bool
+    needs_research: bool
 
 
 def _collect_workspace_file_list(run_paths: Any) -> list[str]:
@@ -20,6 +32,155 @@ def _collect_workspace_file_list(run_paths: Any) -> list[str]:
         str(path.relative_to(run_paths.workspace_dir).as_posix())
         for path in run_paths.workspace_dir.rglob("*")
         if path.is_file()
+    )
+
+def _extract_exception_line(stderr: str) -> str:
+    """
+    Tracebackの最終例外行を返す。見つからない場合は空白を返す
+    """
+    for line in reversed(stderr.splitlines()):
+        line = line.strip()
+        if line and not line.startswith(" ") and ":" in line:
+            return line
+    return ""
+
+def _classify_failure(stderr: str, returncode: int) -> FailureClassification:
+    """
+    stderrとreturncodeから失敗を分類し、FailureClassificationを返す。
+    将来的にruntime_error_unknown の発生率が高くなったら、LLMエスカレーションを検討。
+    """
+    exception_line = _extract_exception_line(stderr)
+
+    if returncode == 124 or "timeout" in stderr.lower():
+        return FailureClassification(
+            summary="timeout",
+            likely_cause="Execution exceeded the time limit.",
+            suggested_fixes=["Check for infinite loops", "Reduce workload", "Increase timeout threshold"],
+            can_self_fix=True,
+            needs_research=False,
+        )
+
+    def starts(prefix: str) -> bool:
+        return exception_line.startswith(prefix)
+
+    if starts("ModuleNotFoundError"):
+        module = exception_line.split("'")[1] if "'" in exception_line else "unknown"
+        return FailureClassification(
+            summary="missing_module",
+            likely_cause=f"Module '{module}' is not installed.",
+            suggested_fixes=[f"pip install {module}", "Check virtual environment", "Check for typos in module name"],
+            can_self_fix=False,
+            needs_research=True,
+        )
+
+    if starts("SyntaxError") or starts("IndentationError"):
+        return FailureClassification(
+            summary="syntax_error",
+            likely_cause="Invalid syntax or indentation.",
+            suggested_fixes=["Unify indentation (4 spaces recommended)", "Check matching brackets and quotes"],
+            can_self_fix=True,
+            needs_research=False,
+        )
+
+    if starts("NameError") or starts("AttributeError") or starts("TypeError"):
+        return FailureClassification(
+            summary="name_or_type_error",
+            likely_cause="Mismatched variable name, attribute, or type.",
+            suggested_fixes=["Check for typos in variable names", "Verify types (e.g. str vs int)", "Check object is not None"],
+            can_self_fix=True,
+            needs_research=False,
+        )
+
+    return FailureClassification(
+        summary="runtime_error_unknown",
+        likely_cause=f"Unclassified runtime error: {exception_line or 'no details'}",
+        suggested_fixes=["Inspect stderr stack trace", "Reproduce and isolate the issue"],
+        can_self_fix=False,
+        needs_research=True,
+    )
+
+def _build_error_signature(stderr: str, returncode: int) -> str:
+    """
+    例外種別・代表メッセージ・returncodeを正規化してSHA256ハッシュを生成する。
+    同一エラーの反復検知に使用。可変値（パス・行番号）は除去して揺れを吸収する。
+    """
+    exception_line = _extract_exception_line(stderr)
+
+    normalized = exception_line
+    # /path/to/file.py 形式のパスを除去
+    normalized = re.sub(r'[\w/\\.-]+\.py', '<file>', normalized)
+    # 行番号 (line 42) を除去
+    normalized = re.sub(r'line \d+', 'line <N>', normalized)
+    # 数字の連続を除去（ポート番号・アドレス等）
+    normalized = re.sub(r'\b\d+\b', '<N>', normalized)
+    # クォート内の文字列（パス・変数名等）を除去
+    normalized = re.sub(r"'[^']*'", "'<V>'", normalized)
+    # 余分な空白を正規化
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+
+    raw = f"{normalized}|rc={returncode}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _build_evaluator_feedback(execution: LocalExecutionResult) -> EvaluatorFeedback:
+    """
+    実行結果からCoderへ渡す構造化フィードバックを組み立てる。
+
+    Args:
+        execution: ローカル実行の結果。
+    """
+    if execution.returncode == 0:
+        return {
+            "summary": "success",
+            "likely_cause": "Execution completed successfully.",
+            "suggested_fixes": [],
+            "can_self_fix": False,
+            "needs_research": False,
+            "return_code": execution.returncode,
+            "stdout": execution.stdout,
+            "stderr": execution.stderr,
+            "raw": {},
+        }
+
+    classification = _classify_failure(execution.stderr, execution.returncode)
+    exception_line = _extract_exception_line(execution.stderr)
+    return {
+        "summary": classification.summary,
+        "likely_cause": classification.likely_cause,
+        "suggested_fixes": classification.suggested_fixes,
+        "can_self_fix": classification.can_self_fix,
+        "needs_research": classification.needs_research,
+        "return_code": execution.returncode,
+        "stdout": execution.stdout,
+        "stderr": execution.stderr,
+        "raw": {
+            "exception_line": exception_line,
+            "returncode": execution.returncode,
+        },
+    }
+
+
+def _build_feedback_log_section(feedback: EvaluatorFeedback) -> str:
+    """
+    execution_log に追記する FEEDBACK セクションを生成する。
+
+    Args:
+        feedback: Evaluator の構造化フィードバック。
+    """
+    fixes = feedback.get("suggested_fixes") or []
+    if fixes:
+        fixes_text = "\n".join(f"- {item}" for item in fixes)
+    else:
+        fixes_text = "- (none)"
+
+    return (
+        "=== FEEDBACK ===\n"
+        f"summary: {feedback.get('summary', '')}\n"
+        f"likely_cause: {feedback.get('likely_cause', '')}\n"
+        f"can_self_fix: {feedback.get('can_self_fix', False)}\n"
+        f"needs_research: {feedback.get('needs_research', False)}\n"
+        "suggested_fixes:\n"
+        f"{fixes_text}\n"
     )
 
 
@@ -63,6 +224,22 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
         timeout_sec=60,
     )
     is_success = execution.returncode == 0
+    feedback = _build_evaluator_feedback(execution)
+
+    if is_success:
+        current_error_signature = None
+        next_same_error_count = 0
+    else:
+        current_error_signature = _build_error_signature(
+            execution.stderr,
+            execution.returncode,
+        )
+        prev_error_signature = state.get("error_signature")
+        prev_same_error_count = state.get("same_error_count", 0)
+        if prev_error_signature == current_error_signature:
+            next_same_error_count = prev_same_error_count + 1
+        else:
+            next_same_error_count = 1
 
     execution_log = (
         "=== Local Execution ===\n"
@@ -71,7 +248,8 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
         "=== STDOUT ===\n"
         f"{execution.stdout.rstrip()}\n\n"
         "=== STDERR ===\n"
-        f"{execution.stderr.rstrip()}\n"
+        f"{execution.stderr.rstrip()}\n\n"
+        f"{_build_feedback_log_section(feedback)}"
     )
 
     # 3) ExperimentResult の作成
@@ -111,12 +289,26 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
         new_status = "failed"
         next_step = "done"
         next_retry_count = retry_count + 1
-        message_content = f"Evaluator: リトライ上限（{retry_count + 1}回）に達しました。実行を停止します。"
+        message_content = (
+            f"{feedback['summary']}: "
+            f"リトライ上限（{retry_count + 1}回）に達しました。実行を停止します。"
+        )
+    elif feedback.get("needs_research") or not feedback.get("can_self_fix", False):
+        new_status = "researching"
+        next_step = "researcher"
+        next_retry_count = retry_count + 1
+        message_content = (
+            f"{feedback['summary']}: "
+            f"試行 {retry_count + 1}回目で失敗。Researcher に追加調査を依頼します。"
+        )
     else:
         new_status = "coding"  # 失敗したがリトライ可能なら Coder に戻す
         next_step = "coder"
         next_retry_count = retry_count + 1
-        message_content = f"Evaluator: 実行エラーを検知（試行 {retry_count + 1}回目）。Coder に修正を依頼します。"
+        message_content = (
+            f"{feedback['summary']}: "
+            f"試行 {retry_count + 1}回目で失敗。Coder に修正を依頼します。"
+        )
 
     # 7) Stateの更新
     return {
@@ -128,6 +320,10 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
         "status": new_status,
         "current_step": next_step,
         "retry_count": next_retry_count,
+        "evaluator_feedback": feedback,
+        "error_signature": current_error_signature,
+        "same_error_count": next_same_error_count,
+        "stop_reason": None,
         "error": None if is_success else error_message,
         "messages": [AIMessage(content=message_content)],
     }

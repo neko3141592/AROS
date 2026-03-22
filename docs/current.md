@@ -1,125 +1,48 @@
-**1. 先に仕様を固定する（コードを書く前）**
-
-1. project_id 未指定時は**従来どおり** storage/runs/{run_id} を使う。
-2. project_id 指定時は storage/projects/{project_id}/runs/{run_id} を使う。
-3. parent_run_id は「同じ project の過去 run」を参照する。
-4. parent_run_id が不正・不存在なら**失敗にせず**新規 workspace 作成にフォールバック。
-5. workspace 継承は「コピー（snapshot）」で実施し、親を破壊しない。
-6. meta.json に project_id, parent_run_id, workspace_source_run_id を必ず記録する（未使用時は null）。
-
----
-
-**2. RunPaths を拡張する**  
-編集: file_io.py (line 12)
-
-RunPaths に次を追加します。
-
-1. project_id: str | None
-2. parent_run_id: str | None
-3. workspace_source_run_id: str | None
-4. （任意）runs_root_dir: Path を持たせるとデバッグしやすい。
-
-この時点では既存コードが壊れないよう、追加フィールドは None 許容にします。
-
----
-
-**3. パス解決ヘルパーを追加する**  
-編集: file_io.py
-
-必要な内部関数を先に作ると安全です。
-
-1. _sanitize_id(value: str) -> str（/, .., 空白などを安全化）
-2. _get_runs_root(base_dir, project_id)
-3. _resolve_parent_workspace(runs_root, parent_run_id)（同一ルート内のみ許可）
-4. _copy_workspace_snapshot(src, dst)（shutil.copytree ベース）
-
----
-
-**4. create_run_paths を project 対応にする**  
-編集: file_io.py (line 25)
-
-シグネチャを次のように拡張します。
-
-`def create_run_paths( task_id: str, base_dir: Path | None = None, project_id: str | None = None, parent_run_id: str | None = None, ) -> RunPaths: ...`
-
-実装順は次です。
-
-1. project_id がある場合は storage/projects/{project_id}/runs を root にする。
-2. project_id がない場合は従来の storage/runs を root にする。
-3. run_id 生成は現行ロジックを流用。
-4. run_dir 作成。
-5. parent_run_id が有効なら親 workspace を新 run の workspace へコピー。
-6. 無効なら空 workspace を作成。
-7. workspace_source_run_id は「実際にコピー元として使えた run_id」を記録。使えなければ None。
-
----
-
-**5. meta.json 拡張**  
-編集: file_io.py (line 129)
-
-write_meta の payload を拡張します。
-
-1. project_id
-2. parent_run_id
-3. workspace_source_run_id
-
-実装は paths から読む形にすると呼び出し側変更が最小です。  
-（write_meta(paths, task_id, files) の呼び出しを維持できる）
-
----
-
-**6. 実行エントリ側を対応させる**  
-編集: main.py (line 77)
-
-run_aros を次のように拡張します。
-
-1. run_aros(..., project_id: str | None = None, parent_run_id: str | None = None)
-2. create_run_paths(task_id=..., project_id=project_id, parent_run_id=parent_run_id) を呼ぶ。
-3. _serialize_run_paths に新フィールドも含める。
-4. 既存呼び出し（引数2つ）でも動くようデフォルト値維持。
-
----
-
-**7. Evaluator はそのままでも良いが、メタ記録だけ確認**  
-確認対象: evaluator.py (line 92)
-
-すでに write_meta(run_paths, ...) を呼んでいるので、write_meta を拡張すれば自動で新キーが保存されます。  
-追加変更は基本不要です。
-
----
-
-**8. テストを増やす（ここが超重要）**  
-編集: test_tools.py (line 33)
-
-この順で追加すると安全です。
-
-1. project_id ありで storage/projects/{id}/runs/{run_id} が作られる。
-2. project_id なしで従来どおり storage/runs/{run_id} になる。
-3. 有効 parent_run_id で workspace がコピーされる。
-4. 無効 parent_run_id で空 workspace にフォールバックする。
-5. meta.json に3キーが入る。
-6. 従来テスト（create_run_paths(task_id, base_dir)）がそのまま通る。
-
----
-
-**9. 後方互換のチェック項目**
-
-1. 既存 API 呼び出しが1行も変更不要で動くこと。
-2. 既存の storage/runs 形式の run が読めること。
-3. project_id=None 時の挙動が完全一致なこと。
-4. meta.json の新キーは追加のみで、既存キーを壊さないこと。
-
----
-
-**10. 実装を小さく分ける（おすすめコミット単位）**
-
-1. RunPaths 拡張 + create_run_paths project 対応
-2. parent_run_id workspace snapshot 実装
-3. write_meta 拡張 + main.py シリアライズ更新
-4. テスト追加
-5. roadmap チェック更新
-
----
-
-必要なら次の返答で、上記をそのまま実装できるように  
-file_io.py の具体的な差分設計（擬似コードではなく、ほぼ貼り付け可能な関数単位）まで出します。
+1. AgentState に自己修正用フィールドを追加する。  
+    編集: state.py  
+    追加候補: failure_summary, failure_fingerprint, stop_reason, evaluator_feedback。  
+    完了条件: Evaluatorが次回Coderに渡したい情報を state に保持できる。
+    進捗: 完了。`evaluator_feedback`, `error_signature`, `same_error_count`, `stop_reason` を保持できる。
+    
+2. Evaluator に失敗解析ロジックを追加する。  
+    編集: evaluator.py  
+    実装関数例: _summarize_failure(stderr, returncode), _fingerprint_failure(stderr, returncode)。  
+    分類方針例: ModuleNotFoundError, SyntaxError, AssertionError, Timeout, RuntimeError。  
+    完了条件: 実行失敗時に failure_summary と failure_fingerprint が必ず生成される。
+    進捗: 完了。失敗分類とエラーフィンガープリント生成が実装済み。
+    
+3. Evaluator の返却 payload に上記を含める。  
+    編集: evaluator.py  
+    return {...} に failure_summary, failure_fingerprint, evaluator_feedback, stop_reason を追加。  
+    完了条件: Coderノードが state から失敗要約を読める。
+    進捗: 完了。`evaluator_feedback`, `execution_stderr`, `error_signature`, `stop_reason` を state に返却している。
+    
+4. Coder の user prompt 構築に失敗コンテキストを注入する。  
+    編集: coder.py  
+    _build_user_prompt(...) または追加ヘルパーで、前回 execution_stderr と failure_summary を必ず入れる。  
+    完了条件: 2回目以降のCoderが「前回どこで失敗したか」を明示的に認識して修正する。
+    進捗: 完了。retry時は `summary / likely_cause / suggested_fixes / stderr` を prompt 先頭に注入する。
+    
+5. Coder システムプロンプトを自己修正向けに追記する。  
+    編集: system_coder.yaml  
+    追記内容例: 「前回の失敗要因を優先して修正」「無関係な変更を避ける」「必要ならツールで再確認」。  
+    完了条件: プロンプト仕様と実装（state注入）が一致する。
+    進捗: 一部未完。自己修正ルールは `coder.py` の user prompt 側で補完済みだが、`system_coder.yaml` 本体の整理は未反映。
+    
+6. 停止条件の最小版を入れる。  
+    編集: evaluator.py, edges.py  
+    まずは max_retry と「同一 fingerprint の連続回数」で停止。  
+    完了条件: 同じ失敗を無限に繰り返さない。
+    進捗: 一部未完。`max_retry` と fingerprint 検知はあるが、同一 fingerprint 反復での停止条件は未実装。
+    
+7. テストを追加する。  
+    編集: test_evaluator.py, test_nodes_llm.py  
+    追加ケース: 失敗解析がstateへ入る、同一エラー反復で停止、2回目で修正成功。  
+    完了条件: self-correction の最小統合テストが通る。
+    進捗: 一部完了。失敗解析・retry prompt・2回目で修正成功のテストは追加済み。同一エラー反復停止テストは未完。
+    
+8. v0.2b の未更新チェックを整理してから v0.2c に移る。  
+    編集: roadmap_v0.2b.md, roadmap_v0.2c.md  
+    v0.2b-5 は「テスト追加済み」の項目を更新。  
+    完了条件: ロードマップと実装状態が一致する。
+    進捗: 進行中。v0.2c 側は今回の自己修正ループ進捗を反映、v0.2b 側の未完テスト項目は継続管理。

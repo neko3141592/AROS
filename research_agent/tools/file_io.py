@@ -93,6 +93,35 @@ def _resolve_parent_workspace(runs_root: Path, parent_run_id: str) -> Path:
     return parent_workspace
 
 
+def _find_latest_run_id(runs_root: Path, exclude_run_id: str | None = None) -> str | None:
+    """
+    runs_root 配下から最新の run_id を返す。
+
+    Args:
+        runs_root: run ディレクトリを格納するルート。
+        exclude_run_id: 除外したい run_id。
+
+    Returns:
+        最新 run の run_id。見つからなければ None。
+    """
+    root = runs_root.resolve()
+    candidates: list[Path] = []
+    for child in root.iterdir():
+        if not child.is_dir():
+            continue
+        if exclude_run_id and child.name == exclude_run_id:
+            continue
+        if not (child / "workspace").is_dir():
+            continue
+        candidates.append(child)
+
+    if not candidates:
+        return None
+
+    latest = max(candidates, key=lambda path: (path.stat().st_mtime_ns, path.name))
+    return latest.name
+
+
 def _copy_workspace_snapshot(src: Path, dst: Path) -> Path:
     """
     workspace をスナップショットとしてコピーする。
@@ -124,7 +153,7 @@ class RunPaths:
     """
     run_id: str         # 実行の一意なID
     run_dir: Path       # この実行のための専用ディレクトリ
-    code_path: Path     # 生成されたメインコード(main.py)のパス
+    code_path: Path     # 生成されたメインコード(main.py)の正本パス（workspace/main.py）
     log_path: Path      # 実行ログ(execution.log)のパス
     workspace_dir: Path # 作業用一時ファイルなどが置かれるディレクトリ
     meta_path: Path     # 実行のメタ情報(meta.json)のパス
@@ -152,7 +181,7 @@ def create_run_paths(
         実行ディレクトリ一式を指す RunPaths。
     """
     safe_project_id = _sanitize_id(project_id) if project_id else None
-    safe_parent_run_id = _sanitize_id(parent_run_id) if parent_run_id else None
+    explicit_parent_run_id = _sanitize_id(parent_run_id) if parent_run_id else None
 
     runs_root = _get_runs_root(base_dir, safe_project_id)
     runs_root.mkdir(parents=True, exist_ok=True)
@@ -166,13 +195,20 @@ def create_run_paths(
     run_dir = runs_root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
+    resolved_parent_run_id = explicit_parent_run_id
+    if resolved_parent_run_id is None and safe_project_id is not None:
+        resolved_parent_run_id = _find_latest_run_id(
+            runs_root=runs_root,
+            exclude_run_id=run_id,
+        )
+
     # 作業領域(workspace)の作成
     workspace_dir = run_dir / "workspace"
     workspace_source_run_id: str | None = None
-    if safe_parent_run_id:
+    if resolved_parent_run_id:
         try:
             parent_workspace = _resolve_parent_workspace(
-                runs_root=runs_root, parent_run_id=safe_parent_run_id
+                runs_root=runs_root, parent_run_id=resolved_parent_run_id
             )
             _copy_workspace_snapshot(parent_workspace, workspace_dir)
             workspace_source_run_id = parent_workspace.parent.name
@@ -185,12 +221,12 @@ def create_run_paths(
     return RunPaths(
         run_id=run_id,
         run_dir=run_dir,
-        code_path=run_dir / "main.py",
+        code_path=workspace_dir / "main.py",
         log_path=run_dir / "execution.log",
         workspace_dir=workspace_dir,
         meta_path=run_dir / "meta.json",
         project_id=safe_project_id,
-        parent_run_id=safe_parent_run_id,
+        parent_run_id=resolved_parent_run_id,
         workspace_source_run_id=workspace_source_run_id,
     )
 

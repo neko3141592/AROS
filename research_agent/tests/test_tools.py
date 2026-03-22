@@ -47,6 +47,7 @@ def test_create_run_paths_creates_directories(tmp_path: Path) -> None:
     assert paths.run_dir.is_dir()
     assert paths.workspace_dir.exists()
     assert paths.workspace_dir.is_dir()
+    assert paths.code_path == paths.workspace_dir / "main.py"
     assert paths.run_id.startswith("task-001_")
     assert paths.project_id is None
     assert paths.parent_run_id is None
@@ -71,6 +72,78 @@ def test_create_run_paths_with_project_id_uses_project_hierarchy(tmp_path: Path)
     assert paths.project_id == "my_project"
     assert paths.parent_run_id is None
     assert paths.workspace_source_run_id is None
+
+
+def test_create_run_paths_auto_inherits_latest_workspace_for_project_id(
+    tmp_path: Path,
+) -> None:
+    """
+    test_create_run_paths_auto_inherits_latest_workspace_for_project_id を実行する。
+
+    Args:
+        tmp_path: pytestの一時ディレクトリパス。
+    """
+    first = create_run_paths(
+        task_id="task-project-seed",
+        base_dir=tmp_path,
+        project_id="project-z",
+    )
+    save_workspace_files(
+        first,
+        {
+            "main.py": "print('seed')\n",
+            "notes/context.txt": "keep this context\n",
+        },
+    )
+
+    second = create_run_paths(
+        task_id="task-project-next",
+        base_dir=tmp_path,
+        project_id="project-z",
+    )
+
+    assert second.parent_run_id == first.run_id
+    assert second.workspace_source_run_id == first.run_id
+    assert second.workspace_dir != first.workspace_dir
+    assert (second.workspace_dir / "main.py").read_text(encoding="utf-8") == "print('seed')\n"
+    assert (
+        second.workspace_dir / "notes" / "context.txt"
+    ).read_text(encoding="utf-8") == "keep this context\n"
+
+
+def test_create_run_paths_prefers_explicit_parent_over_latest_project_run(
+    tmp_path: Path,
+) -> None:
+    """
+    test_create_run_paths_prefers_explicit_parent_over_latest_project_run を実行する。
+
+    Args:
+        tmp_path: pytestの一時ディレクトリパス。
+    """
+    first = create_run_paths(
+        task_id="task-project-first",
+        base_dir=tmp_path,
+        project_id="project-priority",
+    )
+    save_workspace_files(first, {"main.py": "print('first')\n"})
+
+    second = create_run_paths(
+        task_id="task-project-second",
+        base_dir=tmp_path,
+        project_id="project-priority",
+    )
+    save_workspace_files(second, {"main.py": "print('second')\n"})
+
+    third = create_run_paths(
+        task_id="task-project-third",
+        base_dir=tmp_path,
+        project_id="project-priority",
+        parent_run_id=first.run_id,
+    )
+
+    assert third.parent_run_id == first.run_id
+    assert third.workspace_source_run_id == first.run_id
+    assert (third.workspace_dir / "main.py").read_text(encoding="utf-8") == "print('first')\n"
 
 
 def test_create_run_paths_inherits_workspace_from_parent_run(tmp_path: Path) -> None:
@@ -228,6 +301,8 @@ def test_save_and_read_generated_code_roundtrip(tmp_path: Path) -> None:
 
     assert loaded == code
     assert paths.code_path.exists()
+    assert paths.code_path == paths.workspace_dir / "main.py"
+    assert not (paths.run_dir / "main.py").exists()
 
 
 def test_write_execution_log_appends(tmp_path: Path) -> None:

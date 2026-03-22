@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -115,3 +116,78 @@ def test_generate_text_raises_on_invalid_response(monkeypatch: pytest.MonkeyPatc
 
     with pytest.raises(llm_client.LLMClientError, match="Invalid response format"):
         llm_client.generate_text("sys", "user", model="gpt-test")
+
+
+def test_generate_with_tools_normalizes_object_tool_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    test_generate_with_tools_normalizes_object_tool_calls を実行する。
+
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+    """
+
+    class FakeFunction:
+        def __init__(self, name: str, arguments: str) -> None:
+            self.name = name
+            self.arguments = arguments
+
+    class FakeToolCall:
+        def __init__(self) -> None:
+            self.id = "call_1"
+            self.type = "function"
+            self.function = FakeFunction(
+                name="read_file",
+                arguments=json.dumps({"file_path": "main.py"}),
+            )
+
+    def fake_completion(**_: object):
+        """
+        fake_completion を実行する。
+
+        Args:
+            **_: 未使用の可変引数。
+        """
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [FakeToolCall()],
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr(llm_client, "completion", fake_completion)
+
+    result = llm_client.generate_with_tools(
+        "sys",
+        "user",
+        model="gpt-test",
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"file_path": {"type": "string"}},
+                    },
+                },
+            }
+        ],
+    )
+
+    assert result["content"] == ""
+    assert result["tool_calls"] == [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "arguments": '{"file_path": "main.py"}',
+            },
+        }
+    ]
