@@ -33,9 +33,10 @@ from tools.evaluator_helpers import (
     _should_use_evaluator_llm_analysis,
     calculate_next_timeout,
 )
+from tools.execution_engine import get_execution_engine
 from tools.file_io import write_execution_log, write_meta
 from tools.llm_client import LLMClientError, generate_text
-from tools.local_executor import LocalExecutionResult, run_workspace_python
+from tools.local_executor import LocalExecutionResult
 from tools.model_config import get_model_name
 from tools.prompt_manager import PromptManagerError, render_prompt
 from tools.task_context import resolve_execution_entrypoint
@@ -393,12 +394,17 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
             "messages": [AIMessage(content="Evaluator failed: Missing run_paths.")],
         }
 
+    execution_backend_name = (
+        os.getenv("EXECUTION_BACKEND", "local").strip().lower() or "local"
+    )
+
     log_node_start(
         "Evaluator",
         {
             "task_title": task.title,
             "retry_count": retry_count,
             "entrypoint": execution_entrypoint,
+            "execution_backend": execution_backend_name,
             "used_execution_sec": f"{previous_total_execution_duration_sec:.6f}",
             "used_evaluation_sec": f"{previous_total_evaluation_duration_sec:.6f}",
             "used_loop_sec": f"{previous_total_loop_duration_sec:.6f}",
@@ -510,8 +516,18 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
             "messages": [AIMessage(content=timeout_message)],
         }
 
-    # 2) ローカル実行
-    execution = run_workspace_python(
+    # 2) 実行エンジンで実行
+    try:
+        execution_engine = get_execution_engine(execution_backend_name)
+    except (ValueError, NotImplementedError) as error:
+        message = f"Evaluator: Failed to initialize execution engine. {error}"
+        return {
+            "status": "failed",
+            "error": message,
+            "messages": [AIMessage(content=message)],
+        }
+
+    execution = execution_engine.run(
         run_paths=run_paths,
         entrypoint=execution_entrypoint,
         timeout_sec=next_execution_timeout_sec,

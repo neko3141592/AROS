@@ -13,6 +13,20 @@ from schema.task import Task  # noqa: E402
 from tools.file_io import create_run_paths, read_execution_log, save_workspace_files  # noqa: E402
 
 
+class _StubExecutionEngine:
+    """
+    テスト用の実行エンジンスタブ。
+    """
+
+    backend_name = "local"
+
+    def __init__(self, execution_result: Any) -> None:
+        self._execution_result = execution_result
+
+    def run(self, **_kwargs: Any) -> Any:
+        return self._execution_result
+
+
 def _build_state(task: Task, run_paths: Any, retry_count: int = 0) -> Dict[str, Any]:
     """
     _build_state を実行する。
@@ -326,12 +340,14 @@ def test_evaluator_stops_on_total_execution_timeout(
     monkeypatch.setenv("MAX_TOTAL_EXECUTION_TIME_SEC", "3.0")
     monkeypatch.setattr(
         evaluator_mod,
-        "run_workspace_python",
-        lambda **_kwargs: evaluator_mod.LocalExecutionResult(
-            stdout="",
-            stderr="RuntimeError: boom",
-            returncode=1,
-            duration_sec=2.1,
+        "get_execution_engine",
+        lambda *_args, **_kwargs: _StubExecutionEngine(
+            evaluator_mod.LocalExecutionResult(
+                stdout="",
+                stderr="RuntimeError: boom",
+                returncode=1,
+                duration_sec=2.1,
+            )
         ),
     )
 
@@ -379,9 +395,9 @@ def test_evaluator_skips_execution_when_total_budget_is_exhausted(
     monkeypatch.setenv("MAX_TOTAL_EXECUTION_TIME_SEC", "180.0")
     monkeypatch.setattr(
         evaluator_mod,
-        "run_workspace_python",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("run_workspace_python must not be called.")
+        "get_execution_engine",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("get_execution_engine must not be called.")
         ),
     )
 
@@ -517,12 +533,14 @@ def test_evaluator_tracks_evaluation_and_loop_duration_with_llm(
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setattr(
         evaluator_mod,
-        "run_workspace_python",
-        lambda **_kwargs: evaluator_mod.LocalExecutionResult(
-            stdout="",
-            stderr="NameError: name 'missing_name' is not defined",
-            returncode=1,
-            duration_sec=2.0,
+        "get_execution_engine",
+        lambda *_args, **_kwargs: _StubExecutionEngine(
+            evaluator_mod.LocalExecutionResult(
+                stdout="",
+                stderr="NameError: name 'missing_name' is not defined",
+                returncode=1,
+                duration_sec=2.0,
+            )
         ),
     )
     monkeypatch.setattr(
