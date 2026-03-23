@@ -18,7 +18,7 @@ LLM_LOG_HEAD_LINES = 20
 LLM_LOG_TAIL_LINES = 20
 
 _SECRET_ASSIGNMENT_RE = re.compile(
-    r"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|passwd|authorization)\b(\s*[:=]\s*)(['\"]?)([^'\"\s]+)\3"
+    r"(?i)\b(api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|passwd)\b(\s*[:=]\s*)(['\"]?)([^'\"\s]+)\3"
 )
 _BEARER_TOKEN_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9\-._~+/]+=*")
 _OPENAI_KEY_RE = re.compile(r"\bsk-[A-Za-z0-9]{16,}\b")

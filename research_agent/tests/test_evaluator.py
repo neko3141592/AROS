@@ -441,6 +441,95 @@ def test_evaluator_falls_back_when_llm_analysis_fails(
     assert "Mismatched variable name" in feedback["likely_cause"]
 
 
+def test_evaluator_keeps_heuristic_routing_flags_for_name_error(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """
+    test_evaluator_keeps_heuristic_routing_flags_for_name_error を実行する。
+
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+        tmp_path: pytestの一時ディレクトリパス。
+    """
+    task = Task(
+        title="Evaluator Stable NameError Routing",
+        description="Do not let LLM flip routing flags for name errors",
+        constraints=[],
+        subtasks=[],
+    )
+    run_paths = create_run_paths(task_id=task.id, base_dir=tmp_path)
+    save_workspace_files(paths=run_paths, files={"main.py": "print(missing_name)\n"})
+    state = _build_state(task=task, run_paths=run_paths, retry_count=0)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        evaluator_mod,
+        "generate_text",
+        lambda **_kwargs: json.dumps(
+            {
+                "likely_cause": "Extra domain knowledge may be needed.",
+                "suggested_fixes": ["Investigate the broader context"],
+                "can_self_fix": False,
+                "needs_research": True,
+            }
+        ),
+    )
+
+    result = evaluator_mod.evaluator_node(state)
+    feedback = result["evaluator_feedback"]
+
+    assert feedback["summary"] == "name_or_type_error"
+    assert feedback["can_self_fix"] is True
+    assert feedback["needs_research"] is False
+    assert result["current_step"] == "coder"
+
+
+def test_evaluator_keeps_heuristic_routing_flags_for_missing_module(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """
+    test_evaluator_keeps_heuristic_routing_flags_for_missing_module を実行する。
+
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+        tmp_path: pytestの一時ディレクトリパス。
+    """
+    task = Task(
+        title="Evaluator Stable Missing Module Routing",
+        description="Do not let LLM flip routing flags for missing modules",
+        constraints=[],
+        subtasks=[],
+    )
+    run_paths = create_run_paths(task_id=task.id, base_dir=tmp_path)
+    save_workspace_files(
+        paths=run_paths,
+        files={"main.py": "import not_installed_module_abcdefg\n"},
+    )
+    state = _build_state(task=task, run_paths=run_paths, retry_count=0)
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        evaluator_mod,
+        "generate_text",
+        lambda **_kwargs: json.dumps(
+            {
+                "likely_cause": "This can likely be fixed locally.",
+                "suggested_fixes": ["Edit the import to use an available module"],
+                "can_self_fix": True,
+                "needs_research": False,
+            }
+        ),
+    )
+
+    result = evaluator_mod.evaluator_node(state)
+    feedback = result["evaluator_feedback"]
+
+    assert feedback["summary"] == "missing_module"
+    assert feedback["can_self_fix"] is False
+    assert feedback["needs_research"] is True
+    assert result["current_step"] == "researcher"
+
+
 def test_sanitize_execution_outputs_for_llm_masks_and_limits() -> None:
     """
     test_sanitize_execution_outputs_for_llm_masks_and_limits を実行する。

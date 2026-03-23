@@ -35,9 +35,9 @@
 - [x] `run_shell_command` の許可・拒否条件のテスト
 - [x] `system_evaluator.yaml` / `system_coder.yaml` のロード・利用テスト
 - [x] 反復修正ループの統合テスト（収束性と回帰検証）
-- [ ] 「修正不能・知識不足」判定時に `Evaluator -> Researcher -> Coder` へ遷移する動的ルーティングのテスト
-- [ ] 同一プロジェクト内で `run_n -> run_{n+1}` のWorkspace継承が維持されることの統合テスト
-- [ ] 別 `project_id` 間でWorkspaceが混在しないことの分離テスト
+- [x] 「修正不能・知識不足」判定時に `Evaluator -> Researcher -> Coder` へ遷移する動的ルーティングのテスト
+- [x] 同一プロジェクト内で `run_n -> run_{n+1}` のWorkspace継承が維持されることの統合テスト
+- [x] 別 `project_id` 間でWorkspaceが混在しないことの分離テスト
 
 ## 完了条件
 1. CoderとEvaluatorが複数回反復し、成功または定義済み停止条件で終了できる。  

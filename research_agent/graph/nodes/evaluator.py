@@ -71,12 +71,30 @@ def _merge_feedback_with_llm_analysis(
         base_feedback: ヒューリスティック由来のベースフィードバック。
         analysis: LLM 解析結果。
     """
+    summary = str(base_feedback.get("summary") or "")
+    base_can_self_fix = bool(base_feedback.get("can_self_fix", False))
+    base_needs_research = bool(base_feedback.get("needs_research", False))
+
+    # For well-understood heuristic classes, keep routing control flags stable.
+    if summary in {
+        "missing_module",
+        "syntax_error",
+        "name_or_type_error",
+        "timeout",
+    }:
+        can_self_fix = base_can_self_fix
+        needs_research = base_needs_research
+    else:
+        # Otherwise only allow the LLM to move toward a more conservative route.
+        can_self_fix = base_can_self_fix and analysis.can_self_fix
+        needs_research = base_needs_research or analysis.needs_research
+
     return {
         **base_feedback,
         "likely_cause": analysis.likely_cause,
         "suggested_fixes": analysis.suggested_fixes,
-        "can_self_fix": analysis.can_self_fix,
-        "needs_research": analysis.needs_research,
+        "can_self_fix": can_self_fix,
+        "needs_research": needs_research,
     }
 
 

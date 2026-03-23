@@ -387,8 +387,8 @@ def test_coder_includes_failure_context_in_retry_prompts(
     assert len(captured_prompts) == 2
     assert captured_prompts[0].splitlines()[0] == "summary: name_or_type_error"
     for prompt in captured_prompts:
-        assert "前回失敗の直接原因を最優先で修正" in prompt
-        assert "無関係な変更は行わないでください" in prompt
+        assert "Prioritize fixing the direct cause of the previous failure" in prompt
+        assert "avoid unrelated changes" in prompt
         assert "summary: name_or_type_error" in prompt
         assert "read_file(main.py)" in prompt
         assert "likely_cause: Mismatched variable name, attribute, or type." in prompt
@@ -489,3 +489,346 @@ def test_retry_loop_reaches_success_after_coder_fix(
     assert success_eval_state["result"].success is True
     assert success_eval_state["execution_stdout"].strip() == "ok"
     assert success_eval_state["evaluator_feedback"]["summary"] == "success"
+
+
+def test_v02a_baseline_llm_flow_still_works(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """
+    test_v02a_baseline_llm_flow_still_works を実行する。
+
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+        tmp_path: pytestの一時ディレクトリパス。
+    """
+    task = Task(
+        title="Baseline Regression Flow",
+        description="Ensure planner, researcher, coder, and evaluator still complete one pass",
+        constraints=["local only"],
+        subtasks=[],
+    )
+    initial_state = _build_state(task)
+
+    monkeypatch.setattr(
+        planner_mod,
+        "generate_text",
+        lambda **_kwargs: json.dumps(
+            [
+                {
+                    "title": "Research implementation details",
+                    "description": "Summarize relevant implementation details",
+                    "assigned_agent": "researcher",
+                    "status": "pending",
+                },
+                {
+                    "title": "Write runnable code",
+                    "description": "Implement the minimal runnable script",
+                    "assigned_agent": "coder",
+                    "status": "pending",
+                },
+            ]
+        ),
+    )
+    monkeypatch.setattr(researcher_mod, "build_arxiv_query", lambda **_kwargs: "query")
+    monkeypatch.setattr(researcher_mod, "fetch_arxiv_raw", lambda **_kwargs: ["raw"])
+    monkeypatch.setattr(researcher_mod, "parse_arxiv_response", lambda _raw: ["paper"])
+    monkeypatch.setattr(
+        researcher_mod,
+        "format_papers_for_llm",
+        lambda _papers: "paper context",
+    )
+    monkeypatch.setattr(
+        researcher_mod,
+        "generate_text",
+        lambda **_kwargs: "## Overview\n- Build the smallest runnable baseline.",
+    )
+    monkeypatch.setattr(
+        coder_mod,
+        "generate_with_tools",
+        lambda **_kwargs: {
+            "content": json.dumps({"files": {"main.py": "print('baseline ok')\n"}}),
+            "tool_calls": [],
+        },
+    )
+
+    planner_result = planner_mod.planner_node(initial_state)
+    planned_task = planner_result["task"]
+    run_paths = create_run_paths(task_id=planned_task.id, base_dir=tmp_path)
+
+    researcher_input = {**initial_state, **planner_result, "run_paths": run_paths}
+    researcher_result = researcher_mod.researcher_node(researcher_input)
+
+    coder_input = {
+        **initial_state,
+        **planner_result,
+        **researcher_result,
+        "task": planned_task,
+        "run_paths": run_paths,
+    }
+    coder_result = coder_mod.coder_node(coder_input)
+
+    evaluator_input = {**coder_input, **coder_result}
+    evaluator_result = evaluator_mod.evaluator_node(evaluator_input)
+
+    assert planner_result["current_step"] == "researcher"
+    assert researcher_result["current_step"] == "coder"
+    assert coder_result["current_step"] == "evaluator"
+    assert evaluator_result["status"] == "completed"
+    assert evaluator_result["result"].success is True
+    assert evaluator_result["execution_stdout"].strip() == "baseline ok"
+
+
+def test_coder_can_apply_minimal_diff_with_replace_string_tool(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """
+    test_coder_can_apply_minimal_diff_with_replace_string_tool を実行する。
+
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+        tmp_path: pytestの一時ディレクトリパス。
+    """
+    task = Task(
+        title="Minimal Diff Edit",
+        description="Edit only the necessary part of main.py",
+        constraints=["local"],
+        subtasks=[],
+    )
+    run_paths = create_run_paths(task_id=task.id, base_dir=tmp_path)
+    save_workspace_files(
+        paths=run_paths,
+        files={
+            "main.py": (
+                "VALUE = 'before'\n"
+                "print(VALUE)\n"
+            ),
+            "notes.txt": "do not change this file\n",
+        },
+    )
+    state = _build_state(task, run_paths=run_paths)
+    state["research_context"] = "Change only the printed value."
+
+    call_count = 0
+
+    def _fake_generate_with_tools(**_kwargs: Any) -> Dict[str, Any]:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "function": {
+                            "name": "replace_string",
+                            "arguments": json.dumps(
+                                {
+                                    "file_path": "main.py",
+                                    "old": "'before'",
+                                    "new": "'after'",
+                                }
+                            ),
+                        },
+                    }
+                ],
+            }
+
+        return {
+            "content": json.dumps({"files": {}}),
+            "tool_calls": [],
+        }
+
+    monkeypatch.setattr(coder_mod, "generate_with_tools", _fake_generate_with_tools)
+
+    result = coder_mod.coder_node(state)
+
+    assert result["status"] == "coding"
+    assert result["current_step"] == "evaluator"
+    assert result["generated_code"] == "VALUE = 'after'\nprint(VALUE)\n"
+    assert result["generated_files"]["notes.txt"] == "do not change this file\n"
+
+
+def test_evaluator_to_researcher_to_coder_route_is_integrated(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """
+    test_evaluator_to_researcher_to_coder_route_is_integrated を実行する。
+
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+        tmp_path: pytestの一時ディレクトリパス。
+    """
+    task = Task(
+        title="Research Route Integration",
+        description="A missing dependency should route through researcher before coder",
+        constraints=["local"],
+        subtasks=[],
+    )
+    run_paths = create_run_paths(task_id=task.id, base_dir=tmp_path)
+    save_workspace_files(
+        paths=run_paths,
+        files={"main.py": "import not_installed_module_abcdefg\n"},
+    )
+    base_state = _build_state(task, run_paths=run_paths)
+
+    failed_eval_state = evaluator_mod.evaluator_node(base_state)
+
+    assert failed_eval_state["status"] == "researching"
+    assert failed_eval_state["current_step"] == "researcher"
+
+    monkeypatch.setattr(researcher_mod, "build_arxiv_query", lambda **_kwargs: "query")
+    monkeypatch.setattr(researcher_mod, "fetch_arxiv_raw", lambda **_kwargs: ["raw"])
+    monkeypatch.setattr(researcher_mod, "parse_arxiv_response", lambda _raw: ["paper"])
+    monkeypatch.setattr(
+        researcher_mod,
+        "format_papers_for_llm",
+        lambda _papers: "dependency replacement guidance",
+    )
+    monkeypatch.setattr(
+        researcher_mod,
+        "generate_text",
+        lambda **_kwargs: "## Implementation Notes\n- Replace the unavailable import with local code.",
+    )
+    monkeypatch.setattr(
+        coder_mod,
+        "generate_with_tools",
+        lambda **_kwargs: {
+            "content": json.dumps({"files": {"main.py": "print('dependency removed')\n"}}),
+            "tool_calls": [],
+        },
+    )
+
+    researcher_input = {**base_state, **failed_eval_state}
+    researcher_result = researcher_mod.researcher_node(researcher_input)
+    coder_input = {**researcher_input, **researcher_result}
+    coder_result = coder_mod.coder_node(coder_input)
+
+    assert researcher_result["current_step"] == "coder"
+    assert "Implementation Notes" in researcher_result["research_context"]
+    assert coder_result["current_step"] == "evaluator"
+    assert coder_result["generated_code"] == "print('dependency removed')\n"
+
+
+def test_same_project_run_chain_preserves_workspace_integration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """
+    test_same_project_run_chain_preserves_workspace_integration を実行する。
+
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+        tmp_path: pytestの一時ディレクトリパス。
+    """
+    first_task = Task(
+        title="Project Workspace Seed",
+        description="Seed a project workspace",
+        constraints=["local"],
+        subtasks=[],
+    )
+    first_run_paths = create_run_paths(
+        task_id=first_task.id,
+        base_dir=tmp_path,
+        project_id="project-chain",
+    )
+    save_workspace_files(
+        paths=first_run_paths,
+        files={
+            "main.py": "print('seed from first run')\n",
+            "notes/context.txt": "shared context\n",
+        },
+    )
+
+    second_task = Task(
+        title="Project Workspace Inherit",
+        description="Use the inherited workspace as the next source of truth",
+        constraints=["local"],
+        subtasks=[],
+    )
+    second_run_paths = create_run_paths(
+        task_id=second_task.id,
+        base_dir=tmp_path,
+        project_id="project-chain",
+    )
+    state = _build_state(second_task, run_paths=second_run_paths)
+    state["research_context"] = "Keep the inherited workspace untouched."
+
+    monkeypatch.setattr(
+        coder_mod,
+        "generate_with_tools",
+        lambda **_kwargs: {"content": '{"files": {}}', "tool_calls": []},
+    )
+
+    result = coder_mod.coder_node(state)
+
+    assert second_run_paths.parent_run_id == first_run_paths.run_id
+    assert result["generated_code"] == "print('seed from first run')\n"
+    assert result["generated_files"]["notes/context.txt"] == "shared context\n"
+
+
+def test_different_projects_do_not_mix_workspace_integration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """
+    test_different_projects_do_not_mix_workspace_integration を実行する。
+
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+        tmp_path: pytestの一時ディレクトリパス。
+    """
+    project_a_seed = create_run_paths(
+        task_id="task-a-seed",
+        base_dir=tmp_path,
+        project_id="project-a",
+    )
+    save_workspace_files(
+        paths=project_a_seed,
+        files={"main.py": "print('from project a')\n"},
+    )
+
+    project_b_seed = create_run_paths(
+        task_id="task-b-seed",
+        base_dir=tmp_path,
+        project_id="project-b",
+    )
+    save_workspace_files(
+        paths=project_b_seed,
+        files={"main.py": "print('from project b')\n"},
+    )
+
+    project_a_next = create_run_paths(
+        task_id="task-a-next",
+        base_dir=tmp_path,
+        project_id="project-a",
+    )
+    project_b_next = create_run_paths(
+        task_id="task-b-next",
+        base_dir=tmp_path,
+        project_id="project-b",
+    )
+
+    monkeypatch.setattr(
+        coder_mod,
+        "generate_with_tools",
+        lambda **_kwargs: {"content": '{"files": {}}', "tool_calls": []},
+    )
+
+    task_a = Task(
+        title="Project A Continue",
+        description="Continue only project A history",
+        constraints=["local"],
+        subtasks=[],
+    )
+    task_b = Task(
+        title="Project B Continue",
+        description="Continue only project B history",
+        constraints=["local"],
+        subtasks=[],
+    )
+
+    result_a = coder_mod.coder_node(_build_state(task_a, run_paths=project_a_next))
+    result_b = coder_mod.coder_node(_build_state(task_b, run_paths=project_b_next))
+
+    assert project_a_next.parent_run_id == project_a_seed.run_id
+    assert project_b_next.parent_run_id == project_b_seed.run_id
+    assert result_a["generated_code"] == "print('from project a')\n"
+    assert result_b["generated_code"] == "print('from project b')\n"

@@ -29,7 +29,13 @@
 
 ## 2. 危険点の一覧
 
-### 2.1 高優先: `stdout` / `stderr` を LLM にそのまま送っている
+### 2.1 高優先: `stdout` / `stderr` を LLM にそのまま送っている [完了済み]
+
+#### 対応状況
+
+- 完了済み
+- `stdout` / `stderr` の LLM送信用整形関数を導入済み
+- 機密っぽい値のマスキング、行長制限、全体長制限、`stderr` の例外周辺優先抽出を実装済み
 
 #### 何が起きているか
 
@@ -57,7 +63,15 @@
 
 ---
 
-### 2.2 高優先: LLM が `can_self_fix` / `needs_research` をそのまま上書きしている
+### 2.2 高優先: LLM が `can_self_fix` / `needs_research` をそのまま上書きしている [完了済み]
+
+#### 対応状況
+
+- 完了済み
+- `likely_cause` / `suggested_fixes` は引き続き LLM で補強
+- `can_self_fix` / `needs_research` は無条件上書きを廃止
+- `missing_module` / `syntax_error` / `name_or_type_error` / `timeout` はヒューリスティック由来の制御フラグを維持
+- それ以外のカテゴリでも、LLM は保守的な方向にしか制御フラグを動かせないよう変更済み
 
 #### 何が起きているか
 
@@ -88,7 +102,13 @@
 
 ---
 
-### 2.3 高優先: 全体 timeout が「超過前に止める」仕組みになっていない
+### 2.3 高優先: 全体 timeout が「超過前に止める」仕組みになっていない [完了済み]
+
+#### 対応状況
+
+- 完了済み
+- 実行前に残り予算を計算し、`min(per_try_timeout, remaining_budget)` を適用するよう変更済み
+- 残り予算が 0 以下の場合は、実行せず `total_timeout` で停止するよう変更済み
 
 #### 何が起きているか
 
@@ -165,7 +185,13 @@ LLM 呼び出し失敗、JSON 解析失敗、ValidationError などは catch さ
 
 ---
 
-### 2.6 中優先: `MODEL_NAME` を Evaluator と他ノードで共有している
+### 2.6 中優先: `MODEL_NAME` を Evaluator と他ノードで共有している [完了済み]
+
+#### 対応状況
+
+- 完了済み
+- `EVALUATOR_MODEL_NAME` を分離済み
+- 未設定時は `MODEL_NAME`、さらに未設定時は既定値へフォールバックする実装に変更済み
 
 #### 何が起きているか
 
