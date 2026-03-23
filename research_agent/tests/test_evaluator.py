@@ -306,6 +306,61 @@ def test_evaluator_stops_on_total_execution_timeout(
     assert result["total_execution_duration_sec"] == 3.3
 
 
+def test_calculate_next_timeout_uses_remaining_budget() -> None:
+    """
+    test_calculate_next_timeout_uses_remaining_budget を実行する。
+    """
+    assert evaluator_mod.calculate_next_timeout(60.0, 180.0, 0.0) == 60.0
+    assert evaluator_mod.calculate_next_timeout(60.0, 180.0, 179.0) == 1.0
+    assert evaluator_mod.calculate_next_timeout(60.0, 180.0, 180.0) == 0.0
+    assert evaluator_mod.calculate_next_timeout(60.0, 180.0, 300.0) == 0.0
+
+
+def test_evaluator_skips_execution_when_total_budget_is_exhausted(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """
+    test_evaluator_skips_execution_when_total_budget_is_exhausted を実行する。
+
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+        tmp_path: pytestの一時ディレクトリパス。
+    """
+    task = Task(
+        title="Evaluator Exhausted Budget",
+        description="Stop before running when total budget is exhausted",
+        constraints=[],
+        subtasks=[],
+    )
+    run_paths = create_run_paths(task_id=task.id, base_dir=tmp_path)
+    save_workspace_files(paths=run_paths, files={"main.py": "print('ok')\n"})
+    state = _build_state(task=task, run_paths=run_paths, retry_count=1)
+    state["total_execution_duration_sec"] = 180.0
+
+    monkeypatch.setenv("EXECUTION_TIMEOUT_SEC", "60.0")
+    monkeypatch.setenv("MAX_TOTAL_EXECUTION_TIME_SEC", "180.0")
+    monkeypatch.setattr(
+        evaluator_mod,
+        "run_workspace_python",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("run_workspace_python must not be called.")
+        ),
+    )
+
+    result = evaluator_mod.evaluator_node(state)
+
+    assert result["status"] == "failed"
+    assert result["current_step"] == "done"
+    assert result["stop_reason"] == "total_timeout"
+    assert result["result"].stop_reason == "total_timeout"
+    assert result["execution_return_code"] is None
+    assert result["last_execution_duration_sec"] == 0.0
+    assert result["total_execution_duration_sec"] == 180.0
+    assert result["retry_count"] == 1
+    assert result["evaluator_feedback"]["summary"] == "timeout"
+    assert "Skipped: total timeout budget exhausted before execution." in result["execution_logs"]
+
+
 def test_evaluator_uses_llm_analysis_when_enabled(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -384,3 +439,111 @@ def test_evaluator_falls_back_when_llm_analysis_fails(
 
     assert feedback["summary"] == "name_or_type_error"
     assert "Mismatched variable name" in feedback["likely_cause"]
+
+
+def test_sanitize_execution_outputs_for_llm_masks_and_limits() -> None:
+    """
+    test_sanitize_execution_outputs_for_llm_masks_and_limits を実行する。
+    """
+    long_token = "Abc1234567890Def4567890Ghijklmno"
+    long_url = "https://internal.example.com/" + ("verylongpath/" * 10)
+    stdout = (
+        f"api_key={long_token}\n"
+        f"Authorization: Bearer {long_token}\n"
+        f"{long_url}\n"
+        + ("A" * 600)
+    )
+
+    stderr_lines = [f"noise line {i}" for i in range(120)]
+    stderr_lines.extend(
+        [
+            "Traceback (most recent call last):",
+            '  File "/Users/alice/projects/aros/main.py", line 1, in <module>',
+            "    raise RuntimeError('boom')",
+            "RuntimeError: boom",
+        ]
+    )
+    stderr_lines.extend(f"tail line {i}" for i in range(120))
+    stderr = "\n".join(stderr_lines)
+
+    safe_stdout, safe_stderr = evaluator_mod._sanitize_execution_outputs_for_llm(
+        stdout,
+        stderr,
+    )
+
+    assert "api_key=" in safe_stdout
+    assert long_token not in safe_stdout
+    assert "Bearer <REDACTED_TOKEN>" in safe_stdout
+    assert "<REDACTED_URL>" in safe_stdout
+    assert "<HOME_PATH>" in safe_stderr
+    assert "RuntimeError: boom" in safe_stderr
+    assert len(safe_stdout) <= evaluator_mod.LLM_STDOUT_MAX_CHARS
+    assert len(safe_stderr) <= evaluator_mod.LLM_STDERR_MAX_CHARS
+
+
+def test_evaluator_passes_sanitized_logs_to_prompt(monkeypatch) -> None:
+    """
+    test_evaluator_passes_sanitized_logs_to_prompt を実行する。
+
+    Args:
+        monkeypatch: pytestの monkeypatch フィクスチャ。
+    """
+    task = Task(
+        title="Prompt Sanitization",
+        description="Ensure prompt gets redacted logs",
+        constraints=[],
+        subtasks=[],
+    )
+    execution = evaluator_mod.LocalExecutionResult(
+        stdout="token=super-secret-token-value",
+        stderr=(
+            "Traceback (most recent call last):\n"
+            '  File "/Users/alice/private/main.py", line 1, in <module>\n'
+            "RuntimeError: failed\n"
+        ),
+        returncode=1,
+        duration_sec=0.01,
+    )
+    base_feedback = {
+        "summary": "runtime_error_unknown",
+        "likely_cause": "Unclassified runtime error",
+        "suggested_fixes": ["Inspect stderr stack trace"],
+        "can_self_fix": False,
+        "needs_research": True,
+        "return_code": 1,
+        "stdout": execution.stdout,
+        "stderr": execution.stderr,
+        "raw": {},
+    }
+    captured_vars: Dict[str, Any] = {}
+
+    def _capture_render_prompt(prompt_name: str, variables: Dict[str, Any]) -> str:
+        assert prompt_name == "system_evaluator"
+        captured_vars.update(variables)
+        return "captured prompt"
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(evaluator_mod, "render_prompt", _capture_render_prompt)
+    monkeypatch.setattr(
+        evaluator_mod,
+        "generate_text",
+        lambda **_kwargs: json.dumps(
+            {
+                "likely_cause": "A runtime error occurred.",
+                "suggested_fixes": ["Check the failing line"],
+                "can_self_fix": True,
+                "needs_research": False,
+            }
+        ),
+    )
+
+    evaluator_mod._analyze_failure_with_llm(task, execution, base_feedback)
+
+    expected_stdout, expected_stderr = evaluator_mod._sanitize_execution_outputs_for_llm(
+        execution.stdout,
+        execution.stderr,
+    )
+    assert captured_vars["stdout"] == expected_stdout
+    assert captured_vars["stderr"] == expected_stderr
+    assert "super-secret-token-value" not in captured_vars["stdout"]
+    assert "/Users/alice/private/main.py" not in captured_vars["stderr"]

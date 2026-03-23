@@ -26,4 +26,4 @@ research_agent/
 │   └── system_coder.yaml
 ├── storage/               # ローカルでの一時データ・ログ
 └── tests/                 # ツール単体のテストコード
-```
+```[【初音ミク】With Jealousy【オリジナル】](https://www.youtube.com/watch?v=1VUR5EtJa7Y&list=RD1VUR5EtJa7Y&start_radio=1&pp=oAcB)

@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import os
-import re
 from dataclasses import dataclass
 from json import JSONDecodeError
 from typing import Any, Dict
@@ -14,9 +11,22 @@ from pydantic import ValidationError
 from graph.state import AgentState, EvaluatorFeedback
 from schema.llm_outputs import EvaluatorAnalysisOutput
 from schema.task import ExperimentResult, Task
+from tools.evaluator_helpers import (
+    LLM_STDERR_MAX_CHARS,
+    LLM_STDOUT_MAX_CHARS,
+    _build_error_signature,
+    _classify_failure,
+    _extract_exception_line,
+    _parse_evaluator_analysis_output,
+    _read_positive_float_env,
+    _sanitize_execution_outputs_for_llm,
+    _should_use_evaluator_llm_analysis,
+    calculate_next_timeout,
+)
 from tools.file_io import write_execution_log, write_meta
 from tools.llm_client import LLMClientError, generate_text
 from tools.local_executor import LocalExecutionResult, run_workspace_python
+from tools.model_config import get_model_name
 from tools.prompt_manager import PromptManagerError, render_prompt
 
 DEFAULT_MODEL_NAME = "gpt-4o-mini"
@@ -27,13 +37,6 @@ DEFAULT_LLM_ANALYSIS_TIMEOUT_SEC = 20.0
 MAX_SAME_ERROR_COUNT = 3
 MAX_RETRY_COUNT = 2
 
-@dataclass
-class FailureClassification:
-    summary: str
-    likely_cause: str
-    suggested_fixes: list[str]
-    can_self_fix: bool
-    needs_research: bool
 
 @dataclass
 class EvaluatorDecision:
@@ -43,28 +46,10 @@ class EvaluatorDecision:
     message: str
 
 
-def _read_positive_float_env(name: str, default: float) -> float:
-    """
-    正の浮動小数点設定値を環境変数から読み取る。
-
-    Args:
-        name: 環境変数名。
-        default: 未設定時の既定値。
-    """
-    raw = os.getenv(name)
-    if raw is None or not raw.strip():
-        return default
-
-    value = float(raw)
-    if value <= 0:
-        raise ValueError(f"{name} must be > 0.")
-    return value
-
-
 def _collect_workspace_file_list(run_paths: Any) -> list[str]:
     """
     _collect_workspace_file_list を実行する。
-    
+
     Args:
         run_paths: 実行ディレクトリ群を保持する RunPaths。
     """
@@ -73,157 +58,6 @@ def _collect_workspace_file_list(run_paths: Any) -> list[str]:
         for path in run_paths.workspace_dir.rglob("*")
         if path.is_file()
     )
-
-def _extract_exception_line(stderr: str) -> str:
-    """
-    Tracebackの最終例外行を返す。見つからない場合は空白を返す
-    """
-    for line in reversed(stderr.splitlines()):
-        line = line.strip()
-        if line and not line.startswith(" ") and ":" in line:
-            return line
-    return ""
-
-def _classify_failure(stderr: str, returncode: int) -> FailureClassification:
-    """
-    stderrとreturncodeから失敗を分類し、FailureClassificationを返す。
-    将来的にruntime_error_unknown の発生率が高くなったら、LLMエスカレーションを検討。
-    """
-    exception_line = _extract_exception_line(stderr)
-
-    if returncode == 124 or "timeout" in stderr.lower():
-        return FailureClassification(
-            summary="timeout",
-            likely_cause="Execution exceeded the time limit.",
-            suggested_fixes=["Check for infinite loops", "Reduce workload", "Increase timeout threshold"],
-            can_self_fix=True,
-            needs_research=False,
-        )
-
-    def starts(prefix: str) -> bool:
-        return exception_line.startswith(prefix)
-
-    if starts("ModuleNotFoundError"):
-        module = exception_line.split("'")[1] if "'" in exception_line else "unknown"
-        return FailureClassification(
-            summary="missing_module",
-            likely_cause=f"Module '{module}' is not installed.",
-            suggested_fixes=[f"pip install {module}", "Check virtual environment", "Check for typos in module name"],
-            can_self_fix=False,
-            needs_research=True,
-        )
-
-    if starts("SyntaxError") or starts("IndentationError"):
-        return FailureClassification(
-            summary="syntax_error",
-            likely_cause="Invalid syntax or indentation.",
-            suggested_fixes=["Unify indentation (4 spaces recommended)", "Check matching brackets and quotes"],
-            can_self_fix=True,
-            needs_research=False,
-        )
-
-    if starts("NameError") or starts("AttributeError") or starts("TypeError"):
-        return FailureClassification(
-            summary="name_or_type_error",
-            likely_cause="Mismatched variable name, attribute, or type.",
-            suggested_fixes=["Check for typos in variable names", "Verify types (e.g. str vs int)", "Check object is not None"],
-            can_self_fix=True,
-            needs_research=False,
-        )
-
-    return FailureClassification(
-        summary="runtime_error_unknown",
-        likely_cause=f"Unclassified runtime error: {exception_line or 'no details'}",
-        suggested_fixes=["Inspect stderr stack trace", "Reproduce and isolate the issue"],
-        can_self_fix=False,
-        needs_research=True,
-    )
-
-def _build_error_signature(stderr: str, returncode: int) -> str:
-    """
-    例外種別・代表メッセージ・returncodeを正規化してSHA256ハッシュを生成する。
-    同一エラーの反復検知に使用。可変値（パス・行番号）は除去して揺れを吸収する。
-    """
-    exception_line = _extract_exception_line(stderr)
-
-    normalized = exception_line
-    # /path/to/file.py 形式のパスを除去
-    normalized = re.sub(r'[\w/\\.-]+\.py', '<file>', normalized)
-    # 行番号 (line 42) を除去
-    normalized = re.sub(r'line \d+', 'line <N>', normalized)
-    # 数字の連続を除去（ポート番号・アドレス等）
-    normalized = re.sub(r'\b\d+\b', '<N>', normalized)
-    # クォート内の文字列（パス・変数名等）を除去
-    normalized = re.sub(r"'[^']*'", "'<V>'", normalized)
-    # 余分な空白を正規化
-    normalized = re.sub(r'\s+', ' ', normalized).strip()
-
-    raw = f"{normalized}|rc={returncode}"
-    return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-
-def _strip_code_fence(text: str) -> str:
-    """
-    LLM が返すコードフェンスを除去する。
-
-    Args:
-        text: 処理対象テキスト。
-    """
-    cleaned = text.strip()
-    if not cleaned:
-        return cleaned
-
-    lines = cleaned.splitlines()
-    if lines and lines[0].strip().startswith("```"):
-        lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        return "\n".join(lines).strip()
-
-    return cleaned
-
-
-def _extract_first_json_payload(text: str) -> Any:
-    """
-    文字列中の最初の JSON payload を取り出す。
-
-    Args:
-        text: 処理対象テキスト。
-    """
-    decoder = json.JSONDecoder()
-    for i, ch in enumerate(text):
-        if ch not in "[{":
-            continue
-        try:
-            obj, _ = decoder.raw_decode(text[i:])
-            return obj
-        except JSONDecodeError:
-            continue
-    raise JSONDecodeError("No valid JSON payload found in text.", text, 0)
-
-
-def _parse_evaluator_analysis_output(raw_text: str) -> EvaluatorAnalysisOutput:
-    """
-    Evaluator 用 LLM 解析出力をパースする。
-
-    Args:
-        raw_text: LLM の生テキスト。
-    """
-    cleaned = _strip_code_fence(raw_text)
-    payload = _extract_first_json_payload(cleaned)
-    if not isinstance(payload, dict):
-        raise ValueError("Evaluator analysis output must be a JSON object.")
-    return EvaluatorAnalysisOutput.model_validate(payload)
-
-
-def _should_use_evaluator_llm_analysis() -> bool:
-    """
-    Evaluator の LLM 解析を有効化すべきか判定する。
-    """
-    flag = (os.getenv("ENABLE_EVALUATOR_LLM_ANALYSIS") or "").strip().lower()
-    if flag in {"0", "false", "no", "off"}:
-        return False
-    return bool(os.getenv("OPENAI_API_KEY"))
 
 
 def _merge_feedback_with_llm_analysis(
@@ -262,6 +96,11 @@ def _analyze_failure_with_llm(
     if not _should_use_evaluator_llm_analysis():
         return base_feedback
 
+    sanitized_stdout, sanitized_stderr = _sanitize_execution_outputs_for_llm(
+        execution.stdout,
+        execution.stderr,
+    )
+
     try:
         system_prompt = render_prompt(
             "system_evaluator",
@@ -269,18 +108,21 @@ def _analyze_failure_with_llm(
                 "task_title": task.title,
                 "task_description": task.description,
                 "return_code": execution.returncode,
-                "stdout": execution.stdout or "(empty)",
-                "stderr": execution.stderr or "(empty)",
+                "stdout": sanitized_stdout,
+                "stderr": sanitized_stderr,
                 "base_summary": base_feedback.get("summary", ""),
                 "base_likely_cause": base_feedback.get("likely_cause", ""),
                 "base_suggested_fixes": base_feedback.get("suggested_fixes", []),
             },
         )
-        model_name = os.getenv("MODEL_NAME", DEFAULT_MODEL_NAME).strip() or DEFAULT_MODEL_NAME
+        evaluator_model = get_model_name(
+            "EVALUATOR_MODEL_NAME",
+            DEFAULT_MODEL_NAME,
+        )
         raw_text = generate_text(
             system_prompt=system_prompt,
             user_prompt="Return only the JSON object.",
-            model=model_name,
+            model=evaluator_model,
             temperature=0.0,
             timeout=DEFAULT_LLM_ANALYSIS_TIMEOUT_SEC,
         )
@@ -425,16 +267,15 @@ def _decide_next_action(
     )
 
 
-
 def evaluator_node(state: AgentState) -> Dict[str, Any]:
     """
     Evaluatorノード（v0.2 ローカル実行版）。
-    
+
     役割:
     - Coderが生成したコードを workspace で実行して評価する。
     - 成功か失敗かを判定し、失敗の場合はリトライを促す。
     - リトライ回数（retry_count）を管理し、上限を超えたら強制終了させる。
-    
+
     Args:
         state: ノード間で受け渡す現在の状態。
     """
@@ -470,12 +311,90 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
         "MAX_TOTAL_EXECUTION_TIME_SEC",
         DEFAULT_MAX_TOTAL_EXECUTION_TIME_SEC,
     )
+    next_execution_timeout_sec = calculate_next_timeout(
+        per_try_timeout=execution_timeout_sec,
+        total_max_timeout=max_total_execution_time_sec,
+        current_total_used=previous_total_execution_duration_sec,
+    )
+
+    if next_execution_timeout_sec <= 0:
+        timeout_message = (
+            "timeout: 累積実行時間の残り予算がないため、実行せずに停止します。"
+        )
+        feedback: EvaluatorFeedback = {
+            "summary": "timeout",
+            "likely_cause": (
+                "Total execution budget was exhausted before starting the next run."
+            ),
+            "suggested_fixes": [
+                "Reduce workload per trial",
+                "Increase MAX_TOTAL_EXECUTION_TIME_SEC if appropriate",
+            ],
+            "can_self_fix": False,
+            "needs_research": False,
+            "return_code": -1,
+            "stdout": "",
+            "stderr": "Skipped execution because no total timeout budget remained.",
+            "raw": {
+                "max_total_execution_time_sec": max_total_execution_time_sec,
+                "previous_total_execution_duration_sec": (
+                    previous_total_execution_duration_sec
+                ),
+                "applied_timeout_sec": next_execution_timeout_sec,
+            },
+        }
+        execution_log = (
+            "=== Local Execution ===\n"
+            "Command: python main.py\n"
+            "Skipped: total timeout budget exhausted before execution.\n"
+            f"Per Try Timeout Sec: {execution_timeout_sec:.6f}\n"
+            f"Total Timeout Sec: {max_total_execution_time_sec:.6f}\n"
+            f"Total Used Sec: {previous_total_execution_duration_sec:.6f}\n"
+            f"Applied Timeout Sec: {next_execution_timeout_sec:.6f}\n\n"
+            f"{_build_feedback_log_section(feedback)}"
+        )
+        result = ExperimentResult(
+            task_id=task.id,
+            success=False,
+            metrics={
+                "execution_duration_sec": 0.0,
+                "total_execution_duration_sec": previous_total_execution_duration_sec,
+            },
+            logs=execution_log,
+            error_message=timeout_message,
+            stop_reason="total_timeout",
+        )
+        write_execution_log(run_paths, execution_log, append=True)
+
+        file_list = _collect_workspace_file_list(run_paths)
+        if not file_list and (run_paths.workspace_dir / "main.py").exists():
+            file_list = ["main.py"]
+        write_meta(run_paths, task.id, file_list)
+
+        return {
+            "result": result,
+            "execution_logs": execution_log,
+            "execution_stdout": "",
+            "execution_stderr": feedback["stderr"],
+            "execution_return_code": None,
+            "last_execution_duration_sec": 0.0,
+            "total_execution_duration_sec": previous_total_execution_duration_sec,
+            "status": "failed",
+            "current_step": "done",
+            "retry_count": retry_count,
+            "evaluator_feedback": feedback,
+            "error_signature": state.get("error_signature"),
+            "same_error_count": state.get("same_error_count", 0),
+            "stop_reason": "total_timeout",
+            "error": timeout_message,
+            "messages": [AIMessage(content=timeout_message)],
+        }
 
     # 2) ローカル実行
     execution = run_workspace_python(
         run_paths=run_paths,
         entrypoint="main.py",
-        timeout_sec=execution_timeout_sec,
+        timeout_sec=next_execution_timeout_sec,
     )
     is_success = execution.returncode == 0
     feedback = _build_evaluator_feedback(task=task, execution=execution)
