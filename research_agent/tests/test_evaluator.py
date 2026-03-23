@@ -28,6 +28,7 @@ def _build_state(task: Task, run_paths: Any, retry_count: int = 0) -> Dict[str, 
         "messages": [],
         "current_step": "evaluator",
         "research_context": "",
+        "execution_entrypoint": task.execution_entrypoint,
         "generated_code": None,
         "generated_files": None,
         "execution_logs": None,
@@ -85,6 +86,29 @@ def test_evaluator_marks_completed_on_success(tmp_path: Path) -> None:
     assert "=== FEEDBACK ===" in result["execution_logs"]
     assert "summary: success" in result["execution_logs"]
     assert "ok" in read_execution_log(run_paths)
+
+
+def test_evaluator_uses_dynamic_execution_entrypoint(tmp_path: Path) -> None:
+    """
+    test_evaluator_uses_dynamic_execution_entrypoint を実行する。
+    """
+    task = Task(
+        title="Evaluator Dynamic Entrypoint",
+        description="Run a non-main entrypoint",
+        constraints=[],
+        subtasks=[],
+        execution_entrypoint="src/app.py",
+    )
+    run_paths = create_run_paths(task_id=task.id, base_dir=tmp_path)
+    save_workspace_files(paths=run_paths, files={"src/app.py": "print('dynamic ok')\n"})
+    state = _build_state(task=task, run_paths=run_paths, retry_count=0)
+
+    result = evaluator_node(state)
+
+    assert result["status"] == "completed"
+    assert result["execution_entrypoint"] == "src/app.py"
+    assert result["execution_stdout"].strip() == "dynamic ok"
+    assert "Command: python src/app.py" in result["execution_logs"]
 
 
 def test_evaluator_returns_to_coder_on_failure(tmp_path: Path) -> None:

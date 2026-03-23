@@ -43,6 +43,7 @@ class AgentState(TypedDict):
     # --- 4. 生成物・実験データ ---
     # 正本は run_paths.workspace_dir 上の実ファイル。
     # generated_* は後方互換のための state mirror として保持する。
+    execution_entrypoint: Optional[str]   # 実行対象の相対エントリーポイント
     generated_code: Optional[str]
     generated_files: Optional[Dict[str, str]]
     execution_logs: Optional[str]        # 実験の実行ログ
@@ -78,6 +79,7 @@ def create_initial_state(task: Task) -> AgentState:
         "messages": [],
         "current_step": "planner",
         "research_context": "",
+        "execution_entrypoint": task.execution_entrypoint,
         "generated_code": None,
         "generated_files": None,
         "execution_logs": None,

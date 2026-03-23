@@ -19,6 +19,7 @@ from tools.researcher_helpers import (
     _build_fallback_research_context,
     _generate_research_summary,
 )
+from tools.task_context import format_subtasks_for_prompt, summarize_failure_for_prompt
 
 DEFAULT_MODEL_NAME = "gpt-4o-mini"
 
@@ -45,10 +46,19 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
         }
 
     try:
+        failure = summarize_failure_for_prompt(
+            state.get("evaluator_feedback"),
+            state.get("execution_stderr"),
+        )
         model_name = get_model_name("RESEARCHER_MODEL_NAME", DEFAULT_MODEL_NAME)
         summary_context, paper_count = _generate_research_summary(
             task_title=task.title,
             task_description=task.description,
+            task_constraints=task.constraints,
+            task_subtasks=format_subtasks_for_prompt(task.subtasks),
+            previous_failure_summary=failure["summary"],
+            previous_failure_likely_cause=failure["likely_cause"],
+            previous_failure_stderr=failure["stderr"],
             model_name=model_name,
             build_arxiv_query_fn=build_arxiv_query,
             fetch_arxiv_raw_fn=fetch_arxiv_raw,

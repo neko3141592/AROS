@@ -22,6 +22,10 @@ class Task(BaseModel):
     description: str = Field(..., description="タスクの詳細な説明・目的")
     constraints: List[str] = Field(default_factory=list, description="制約事項（例: PyTorchを使用, 実行時間は10分以内など）")
     subtasks: List[SubTask] = Field(default_factory=list, description="分解された実行ステップ（サブタスク）のリスト")
+    execution_entrypoint: str = Field(
+        "main.py",
+        description="Evaluator が実行する相対エントリーポイント",
+    )
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class ExperimentResult(BaseModel):

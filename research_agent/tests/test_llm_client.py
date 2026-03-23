@@ -191,3 +191,43 @@ def test_generate_with_tools_normalizes_object_tool_calls(
             },
         }
     ]
+
+
+def test_generate_with_tools_accepts_message_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    test_generate_with_tools_accepts_message_history を実行する。
+    """
+    captured_messages: list[dict[str, object]] = []
+
+    def fake_completion(**kwargs: object):
+        nonlocal captured_messages
+        captured_messages = kwargs["messages"]  # type: ignore[assignment]
+        return {"choices": [{"message": {"content": "DONE", "tool_calls": []}}]}
+
+    monkeypatch.setattr(llm_client, "completion", fake_completion)
+
+    result = llm_client.generate_with_tools(
+        model="gpt-test",
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"file_path": {"type": "string"}},
+                    },
+                },
+            }
+        ],
+        messages=[
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "user"},
+        ],
+    )
+
+    assert result["content"] == "DONE"
+    assert captured_messages[0]["role"] == "system"
+    assert captured_messages[1]["role"] == "user"

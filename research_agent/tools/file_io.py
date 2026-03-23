@@ -290,7 +290,8 @@ def save_generated_code(paths: RunPaths, code: str, filename: str = "main.py") -
         Returns:
         保存先ファイルパス。
     """
-    target = paths.code_path if filename == "main.py" else paths.run_dir / filename
+    rel_path = _validate_relpath(filename)
+    target = paths.workspace_dir / rel_path
     _write_text_atomic(target, code)
     return target
 

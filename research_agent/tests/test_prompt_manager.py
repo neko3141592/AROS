@@ -87,6 +87,8 @@ def test_render_prompt_raises_when_variable_is_missing() -> None:
                 "task_title": "モデル実装",
                 "task_description": "推論コードも含める",
                 "task_constraints": ["CPUのみ"],
+                "task_subtasks": ["[coder] Implement the baseline"],
+                "target_entrypoint": "main.py",
                 # research_context をあえて省略
             },
         )
@@ -130,6 +132,8 @@ def test_build_system_message_returns_langchain_message() -> None:
             "task_title": "MNIST分類",
             "task_description": "ローカルで1エポックだけ学習",
             "task_constraints": ["外部APIを呼ばない"],
+            "task_subtasks": ["[coder] Implement training loop"],
+            "target_entrypoint": "main.py",
             "research_context": "CNNの最小構成で十分",
         },
     )

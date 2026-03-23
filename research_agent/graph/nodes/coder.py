@@ -1,25 +1,24 @@
 from __future__ import annotations
 
-import json
 import os
-from json import JSONDecodeError
 from typing import Any, Dict
 
 from langchain_core.messages import AIMessage
-from pydantic import ValidationError
 
 from graph.state import AgentState
 from tools.coder_helpers import (
     _build_failure_context,
+    _maybe_extract_legacy_files_payload,
     _build_user_prompt,
+    _build_tool_result_message,
     _build_workspace_state_payload,
     _execute_tool_call,
-    _parse_coder_output,
 )
 from tools.file_io import save_generated_code, save_workspace_files
 from tools.llm_client import LLMClientError, generate_with_tools
 from tools.prompt_manager import PromptManagerError, render_prompt
 from tools.coder_tooling import TOOL_FUNCTIONS, TOOL_SCHEMAS
+from tools.task_context import format_subtasks_for_prompt, resolve_execution_entrypoint
 from tools.workspace_tools import (
     list_files as workspace_list_files,
     read_file as workspace_read_file,
@@ -62,18 +61,23 @@ def coder_node(state: AgentState) -> Dict[str, Any]:
                 "task_title": task.title,
                 "task_description": task.description,
                 "task_constraints": task.constraints,
+                "task_subtasks": format_subtasks_for_prompt(task.subtasks),
+                "target_entrypoint": resolve_execution_entrypoint(
+                    task,
+                    state.get("execution_entrypoint"),
+                ),
                 "research_context": state.get("research_context", ""),
             },
         )
+        execution_entrypoint = resolve_execution_entrypoint(
+            task,
+            state.get("execution_entrypoint"),
+        )
         base_user_prompt = (
-            "Use the provided tools to inspect and edit the workspace so the task is completed."
-            "Prioritize fixing the direct cause of the previous failure first, and avoid unrelated changes."
-            "Call tools only when needed, and return only JSON once the work is complete."
-            "The final output must always follow this format: "
-            '{"files":{"main.py":"<updated python code>", "<other_changed_file>":"<updated text>"}}.'
-            "Do not output explanations or Markdown."
-            "When retrying after a failure, your first tool call must be read_file(main.py),"
-            "and you must inspect the current main.py before using edit_file, create_file, or replace_string."
+            "Use the provided tools to inspect and edit the workspace until the task is complete. "
+            "Prioritize fixing the direct cause of the previous failure first, and avoid unrelated changes. "
+            "When you are done, stop calling tools and return a short plain-text completion message only. "
+            "Do not return JSON or Markdown."
         )
 
         model_name = get_model_name("CODER_MODEL_NAME", DEFAULT_MODEL_NAME)
@@ -88,17 +92,21 @@ def coder_node(state: AgentState) -> Dict[str, Any]:
             evaluator_feedback=state.get("evaluator_feedback"),
             execution_stderr=state.get("execution_stderr"),
             retry_count=state.get("retry_count", 0),
+            entrypoint=execution_entrypoint,
         )
-        observations: list[str] = []
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": _build_user_prompt(
+                    base_user_prompt,
+                    failure_context=failure_context,
+                ),
+            },
+        ]
         for step in range(max_tool_steps):
-            user_prompt = _build_user_prompt(
-                base_user_prompt,
-                observations,
-                failure_context=failure_context,
-            )
             response = generate_with_tools(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
+                messages=messages,
                 model=model_name,
                 tools=TOOL_SCHEMAS,
                 tool_choice="auto",
@@ -106,51 +114,78 @@ def coder_node(state: AgentState) -> Dict[str, Any]:
                 timeout=60,
             )
 
-            print(f"LLM RESPONSE IS {response}")
-
             tool_calls = response.get("tool_calls") or []
             content = (response.get("content") or "").strip()
 
             if isinstance(tool_calls, list) and tool_calls:
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": content,
+                        "tool_calls": tool_calls,
+                    }
+                )
                 step_results: list[dict[str, Any]] = []
                 for tool_call in tool_calls:
                     if not isinstance(tool_call, dict):
-                        step_results.append(
+                        tool_result = {
+                            "ok": False,
+                            "error": "Tool call payload must be an object.",
+                        }
+                        step_results.append(tool_result)
+                        messages.append(
                             {
-                                "ok": False,
-                                "error": "Tool call payload must be an object.",
+                                "role": "tool",
+                                "tool_call_id": "",
+                                "name": "unknown",
+                                "content": _build_tool_result_message(tool_result),
                             }
                         )
                         continue
-                    step_results.append(
-                        _execute_tool_call(tool_call, run_paths, TOOL_FUNCTIONS)
-                    )
-
-                observations.append(
-                    json.dumps(
+                    tool_result = _execute_tool_call(tool_call, run_paths, TOOL_FUNCTIONS)
+                    step_results.append(tool_result)
+                    messages.append(
                         {
-                            "step": step + 1,
-                            "tool_results": step_results,
-                        },
-                        ensure_ascii=False,
+                            "role": "tool",
+                            "tool_call_id": str(tool_result.get("id", "")),
+                            "name": str(tool_result.get("name", "unknown")),
+                            "content": _build_tool_result_message(tool_result),
+                        }
                     )
-                )
                 continue
 
             if content:
-                parsed = _parse_coder_output(content)
-                if parsed.files:
-                    save_workspace_files(run_paths, parsed.files)
+                messages.append({"role": "assistant", "content": content})
+                legacy_files = _maybe_extract_legacy_files_payload(content)
+                if legacy_files:
+                    save_workspace_files(run_paths, legacy_files)
+                try:
+                    workspace_state = _build_workspace_state_payload(
+                        run_paths,
+                        workspace_list_files,
+                        workspace_read_file,
+                        save_generated_code,
+                        entrypoint=execution_entrypoint,
+                    )
+                except ValueError as exc:
+                    if step >= max_tool_steps - 1:
+                        raise
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "The task is not complete yet. "
+                                f"{exc} Continue editing the workspace with tools. "
+                                "Do not restart from scratch."
+                            ),
+                        }
+                    )
+                    continue
 
-                workspace_state = _build_workspace_state_payload(
-                    run_paths,
-                    workspace_list_files,
-                    workspace_read_file,
-                    save_generated_code,
-                )
                 generated_files = workspace_state["generated_files"]
                 return {
                     **workspace_state,
+                    "execution_entrypoint": execution_entrypoint,
                     "status": "coding",
                     "current_step": "evaluator",
                     "messages": [
@@ -170,9 +205,11 @@ def coder_node(state: AgentState) -> Dict[str, Any]:
             workspace_list_files,
             workspace_read_file,
             save_generated_code,
+            entrypoint=execution_entrypoint,
         )
         return {
             **workspace_state,
+            "execution_entrypoint": execution_entrypoint,
             "status": "coding",
             "current_step": "evaluator",
             "messages": [
@@ -198,15 +235,15 @@ def coder_node(state: AgentState) -> Dict[str, Any]:
                 )
             ],
         }
-    except (LLMClientError, JSONDecodeError, ValidationError, ValueError) as exc:
+    except (LLMClientError, ValueError) as exc:
         return {
             "status": "failed",
             "error": f"Coder parse/runtime error: {exc}",
             "messages": [
                 AIMessage(
                     content=(
-                        "Coder failed: LLM出力のJSONパース、ツール実行、"
-                        "または結果検証に失敗しました。"
+                        "Coder failed: ツール実行、会話履歴処理、"
+                        "または workspace 検証に失敗しました。"
                     )
                 )
             ],

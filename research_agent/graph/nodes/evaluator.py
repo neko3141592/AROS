@@ -28,6 +28,7 @@ from tools.llm_client import LLMClientError, generate_text
 from tools.local_executor import LocalExecutionResult, run_workspace_python
 from tools.model_config import get_model_name
 from tools.prompt_manager import PromptManagerError, render_prompt
+from tools.task_context import resolve_execution_entrypoint
 
 DEFAULT_MODEL_NAME = "gpt-4o-mini"
 DEFAULT_EXECUTION_TIMEOUT_SEC = 60.0
@@ -302,6 +303,10 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
     # 1) 入力確認
     task = state.get("task")
     run_paths = state.get("run_paths")
+    execution_entrypoint = resolve_execution_entrypoint(
+        task,
+        state.get("execution_entrypoint"),
+    )
     retry_count = state.get("retry_count", 0)
     previous_total_execution_duration_sec = float(
         state.get("total_execution_duration_sec") or 0.0
@@ -363,7 +368,7 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
         }
         execution_log = (
             "=== Local Execution ===\n"
-            "Command: python main.py\n"
+            f"Command: python {execution_entrypoint}\n"
             "Skipped: total timeout budget exhausted before execution.\n"
             f"Per Try Timeout Sec: {execution_timeout_sec:.6f}\n"
             f"Total Timeout Sec: {max_total_execution_time_sec:.6f}\n"
@@ -385,8 +390,8 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
         write_execution_log(run_paths, execution_log, append=True)
 
         file_list = _collect_workspace_file_list(run_paths)
-        if not file_list and (run_paths.workspace_dir / "main.py").exists():
-            file_list = ["main.py"]
+        if not file_list and (run_paths.workspace_dir / execution_entrypoint).exists():
+            file_list = [execution_entrypoint]
         write_meta(run_paths, task.id, file_list)
 
         return {
@@ -395,6 +400,7 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
             "execution_stdout": "",
             "execution_stderr": feedback["stderr"],
             "execution_return_code": None,
+            "execution_entrypoint": execution_entrypoint,
             "last_execution_duration_sec": 0.0,
             "total_execution_duration_sec": previous_total_execution_duration_sec,
             "status": "failed",
@@ -411,7 +417,7 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
     # 2) ローカル実行
     execution = run_workspace_python(
         run_paths=run_paths,
-        entrypoint="main.py",
+        entrypoint=execution_entrypoint,
         timeout_sec=next_execution_timeout_sec,
     )
     is_success = execution.returncode == 0
@@ -437,7 +443,7 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
 
     execution_log = (
         "=== Local Execution ===\n"
-        "Command: python main.py\n"
+        f"Command: python {execution_entrypoint}\n"
         f"Return Code: {execution.returncode}\n\n"
         f"Duration Sec: {execution.duration_sec:.6f}\n"
         f"Total Duration Sec: {next_total_execution_duration_sec:.6f}\n\n"
@@ -474,8 +480,8 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
     # 5. メタ情報の保存
     # state上の generated_files ではなく、workspace 実体を正本として記録する
     file_list = _collect_workspace_file_list(run_paths)
-    if not file_list and (run_paths.workspace_dir / "main.py").exists():
-        file_list = ["main.py"]
+    if not file_list and (run_paths.workspace_dir / execution_entrypoint).exists():
+        file_list = [execution_entrypoint]
     write_meta(run_paths, task.id, file_list)
 
     # 6. ステータスとリトライの判定
@@ -497,6 +503,7 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
         "execution_stdout": execution.stdout,
         "execution_stderr": execution.stderr,
         "execution_return_code": execution.returncode,
+        "execution_entrypoint": execution_entrypoint,
         "last_execution_duration_sec": execution.duration_sec,
         "total_execution_duration_sec": next_total_execution_duration_sec,
         "status": decision.status,

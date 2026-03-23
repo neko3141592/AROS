@@ -97,11 +97,37 @@ def _extract_tool_response(response: Any) -> dict[str, Any]:
     }
 
 
+def _normalize_messages(
+    system_prompt: str | None,
+    user_prompt: str | None,
+    messages: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """
+    completion に渡す messages を正規化する。
+    """
+    if messages is not None:
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("messages must be a non-empty list when provided.")
+        return messages
+
+    if system_prompt is None or user_prompt is None:
+        raise ValueError(
+            "Either messages or both system_prompt and user_prompt must be provided."
+        )
+
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
 def generate_with_tools(
-    system_prompt: str,
-    user_prompt: str,
+    system_prompt: str | None = None,
+    user_prompt: str | None = None,
+    *,
     model: str,
     tools: list[dict[str, Any]],
+    messages: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] = "auto",
     temperature: float = 1.0,
     timeout: float = 30.0,
@@ -116,6 +142,7 @@ def generate_with_tools(
         user_prompt: ユーザープロンプト。
         model: 利用するモデル名。
         tools: 利用可能なツール定義一覧。
+        messages: 既存の会話履歴。指定時は system_prompt / user_prompt の代わりに使う。
         tool_choice: ツール選択ポリシー。
         temperature: 生成温度。
         timeout: APIタイムアウト秒数。
@@ -129,6 +156,8 @@ def generate_with_tools(
     if not isinstance(tools, list) or not tools:
         raise ValueError("tools must be a non-empty list.")
 
+    normalized_messages = _normalize_messages(system_prompt, user_prompt, messages)
+
     attempt = 0
     last_error: Exception | None = None
 
@@ -136,10 +165,7 @@ def generate_with_tools(
         try:
             response = completion(
                 model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
+                messages=normalized_messages,
                 tools=tools,
                 tool_choice=tool_choice,
                 temperature=temperature,

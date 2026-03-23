@@ -13,7 +13,7 @@ import graph.nodes.coder as coder_mod  # noqa: E402
 import graph.nodes.evaluator as evaluator_mod  # noqa: E402
 import graph.nodes.planner as planner_mod  # noqa: E402
 import graph.nodes.researcher as researcher_mod  # noqa: E402
-from schema.task import Task  # noqa: E402
+from schema.task import SubTask, Task  # noqa: E402
 from tools.file_io import create_run_paths, save_workspace_files  # noqa: E402
 
 
@@ -31,6 +31,7 @@ def _build_state(task: Task, run_paths: Any = None) -> Dict[str, Any]:
         "messages": [],
         "current_step": "init",
         "research_context": "",
+        "execution_entrypoint": task.execution_entrypoint,
         "generated_code": None,
         "generated_files": None,
         "execution_logs": None,
@@ -154,6 +155,66 @@ def test_researcher_puts_summary_into_state(monkeypatch: pytest.MonkeyPatch) -> 
     assert result["error"] is None
 
 
+def test_researcher_includes_failure_context_and_subtasks_in_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    test_researcher_includes_failure_context_and_subtasks_in_prompt を実行する。
+    """
+    task = Task(
+        title="Researcher Retry",
+        description="Investigate a failing dependency issue",
+        constraints=["local only"],
+        subtasks=[],
+    )
+    task.subtasks = [
+        SubTask(
+            title="Review dependency options",
+            description="Find a replacement for the missing package",
+            assigned_agent="researcher",
+            status="pending",
+        )
+    ]
+    state = _build_state(task)
+    state["execution_stderr"] = "ModuleNotFoundError: No module named 'missing_pkg'"
+    state["evaluator_feedback"] = {
+        "summary": "missing_module",
+        "likely_cause": "Module 'missing_pkg' is not installed.",
+        "suggested_fixes": ["Find an alternative package"],
+        "can_self_fix": False,
+        "needs_research": True,
+        "return_code": 1,
+        "stdout": "",
+        "stderr": state["execution_stderr"],
+        "raw": {},
+    }
+
+    monkeypatch.setattr(researcher_mod, "build_arxiv_query", lambda **_kwargs: "query")
+    monkeypatch.setattr(researcher_mod, "fetch_arxiv_raw", lambda **_kwargs: ["raw"])
+    monkeypatch.setattr(researcher_mod, "parse_arxiv_response", lambda _raw: ["paper"])
+    monkeypatch.setattr(
+        researcher_mod, "format_papers_for_llm", lambda _papers: "paper context"
+    )
+
+    captured_system_prompts: list[str] = []
+
+    def _fake_generate_text(**kwargs: Any) -> str:
+        captured_system_prompts.append(kwargs["system_prompt"])
+        return "## Retry Context\n- Replace the dependency."
+
+    monkeypatch.setattr(researcher_mod, "generate_text", _fake_generate_text)
+
+    result = researcher_mod.researcher_node(state)
+
+    assert result["status"] == "researching"
+    assert len(captured_system_prompts) == 1
+    system_prompt = captured_system_prompts[0]
+    assert "missing_module" in system_prompt
+    assert "Module 'missing_pkg' is not installed." in system_prompt
+    assert "ModuleNotFoundError" in system_prompt
+    assert "Review dependency options" in system_prompt
+
+
 def test_coder_saves_workspace_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """
     test_coder_saves_workspace_files を実行する。
@@ -197,6 +258,50 @@ def test_coder_saves_workspace_files(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     assert (
         run_paths.workspace_dir / "analysis" / "run.py"
     ).read_text(encoding="utf-8") == "print('analysis')\n"
+
+
+def test_coder_includes_subtasks_and_entrypoint_in_system_prompt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """
+    test_coder_includes_subtasks_and_entrypoint_in_system_prompt を実行する。
+    """
+    task = Task(
+        title="Coder Prompt Context",
+        description="Use planning context while editing",
+        constraints=["local"],
+        subtasks=[
+            SubTask(
+                title="Implement parser",
+                description="Create a small parser module",
+                assigned_agent="coder",
+                status="pending",
+            )
+        ],
+        execution_entrypoint="src/app.py",
+    )
+    run_paths = create_run_paths(task_id=task.id, base_dir=tmp_path)
+    save_workspace_files(
+        paths=run_paths,
+        files={"src/app.py": "print('ok')\n"},
+    )
+    state = _build_state(task, run_paths=run_paths)
+
+    captured_messages: list[list[dict[str, Any]]] = []
+
+    def _fake_generate_with_tools(**kwargs: Any) -> Dict[str, Any]:
+        captured_messages.append(kwargs["messages"])
+        return {"content": "DONE", "tool_calls": []}
+
+    monkeypatch.setattr(coder_mod, "generate_with_tools", _fake_generate_with_tools)
+
+    result = coder_mod.coder_node(state)
+
+    assert result["status"] == "coding"
+    assert len(captured_messages) == 1
+    system_prompt = captured_messages[0][0]["content"]
+    assert "Implement parser" in system_prompt
+    assert "src/app.py" in system_prompt
 
 
 def test_coder_uses_workspace_as_source_of_truth(
@@ -278,11 +383,11 @@ def test_coder_can_use_run_shell_command_for_readonly_exploration(
     state = _build_state(task, run_paths=run_paths)
     state["research_context"] = "Inspect notes if needed, but edit only workspace files."
 
-    captured_prompts: list[str] = []
+    captured_message_batches: list[list[dict[str, Any]]] = []
 
     def _fake_generate_with_tools(**kwargs: Any) -> Dict[str, Any]:
-        captured_prompts.append(kwargs["user_prompt"])
-        if len(captured_prompts) == 1:
+        captured_message_batches.append([dict(message) for message in kwargs["messages"]])
+        if len(captured_message_batches) == 1:
             return {
                 "content": "",
                 "tool_calls": [
@@ -308,9 +413,15 @@ def test_coder_can_use_run_shell_command_for_readonly_exploration(
     assert result["status"] == "coding"
     assert result["current_step"] == "evaluator"
     assert result["generated_code"] == "print('still ok')\n"
-    assert len(captured_prompts) == 2
-    assert "# Tool Execution History" in captured_prompts[1]
-    assert "run_shell_command" in captured_prompts[1]
+    assert len(captured_message_batches) == 2
+    assert captured_message_batches[0][0]["role"] == "system"
+    assert captured_message_batches[0][1]["role"] == "user"
+    second_batch = captured_message_batches[1]
+    assert any(message["role"] == "tool" for message in second_batch)
+    assert any(
+        message.get("role") == "assistant" and message.get("tool_calls")
+        for message in second_batch
+    )
 
 
 def test_coder_includes_failure_context_in_retry_prompts(
@@ -354,11 +465,11 @@ def test_coder_includes_failure_context_in_retry_prompts(
         "raw": {},
     }
 
-    captured_prompts: list[str] = []
+    captured_message_batches: list[list[dict[str, Any]]] = []
 
     def _fake_generate_with_tools(**kwargs: Any) -> Dict[str, Any]:
-        captured_prompts.append(kwargs["user_prompt"])
-        if len(captured_prompts) == 1:
+        captured_message_batches.append([dict(message) for message in kwargs["messages"]])
+        if len(captured_message_batches) == 1:
             return {
                 "content": "",
                 "tool_calls": [
@@ -384,18 +495,21 @@ def test_coder_includes_failure_context_in_retry_prompts(
 
     assert result["status"] == "coding"
     assert result["current_step"] == "evaluator"
-    assert len(captured_prompts) == 2
-    assert captured_prompts[0].splitlines()[0] == "summary: name_or_type_error"
-    for prompt in captured_prompts:
+    assert len(captured_message_batches) == 2
+    first_user_prompt = captured_message_batches[0][1]["content"]
+    second_user_prompt = captured_message_batches[1][1]["content"]
+    assert first_user_prompt.splitlines()[0] == "summary: name_or_type_error"
+    for prompt in [first_user_prompt, second_user_prompt]:
         assert "Prioritize fixing the direct cause of the previous failure" in prompt
         assert "avoid unrelated changes" in prompt
         assert "summary: name_or_type_error" in prompt
-        assert "read_file(main.py)" in prompt
+        assert "inspect main.py before editing it" in prompt
         assert "likely_cause: Mismatched variable name, attribute, or type." in prompt
         assert "- Check for typos in variable names" in prompt
         assert state["execution_stderr"].rstrip() in prompt
-    assert "# Tool Execution History" not in captured_prompts[0]
-    assert "# Tool Execution History" in captured_prompts[1]
+    second_batch = captured_message_batches[1]
+    assert not any(message["role"] == "tool" for message in captured_message_batches[0])
+    assert any(message["role"] == "tool" for message in second_batch)
 
 
 def test_retry_loop_reaches_success_after_coder_fix(
@@ -429,17 +543,18 @@ def test_retry_loop_reaches_success_after_coder_fix(
     assert failed_eval_state["retry_count"] == 1
     assert failed_eval_state["evaluator_feedback"]["summary"] == "name_or_type_error"
 
-    captured_prompts: list[str] = []
+    captured_message_batches: list[list[dict[str, Any]]] = []
     llm_call_count = 0
 
     def _fake_generate_with_tools(**kwargs: Any) -> Dict[str, Any]:
         nonlocal llm_call_count
         llm_call_count += 1
-        prompt = kwargs["user_prompt"]
-        captured_prompts.append(prompt)
+        messages = kwargs["messages"]
+        captured_message_batches.append([dict(message) for message in messages])
 
+        prompt = messages[1]["content"]
         assert prompt.splitlines()[0] == "summary: name_or_type_error"
-        assert "read_file(main.py)" in prompt
+        assert "inspect main.py before editing it" in prompt
 
         if llm_call_count == 1:
             return {
@@ -477,9 +592,11 @@ def test_retry_loop_reaches_success_after_coder_fix(
     assert coder_result["status"] == "coding"
     assert coder_result["current_step"] == "evaluator"
     assert coder_result["generated_code"] == "missing_name = 'ok'\nprint(missing_name)\n"
-    assert len(captured_prompts) == 2
-    assert "# Tool Execution History" not in captured_prompts[0]
-    assert "# Tool Execution History" in captured_prompts[1]
+    assert len(captured_message_batches) == 2
+    assert not any(
+        message["role"] == "tool" for message in captured_message_batches[0]
+    )
+    assert any(message["role"] == "tool" for message in captured_message_batches[1])
 
     success_eval_input = {**coder_input_state, **coder_result}
     success_eval_state = evaluator_mod.evaluator_node(success_eval_input)

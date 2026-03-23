@@ -149,6 +149,7 @@ def run_aros(
         "messages": [HumanMessage(content=f"Request: {task_title}")],
         "current_step": "init",
         "research_context": "",
+        "execution_entrypoint": initial_task.execution_entrypoint,
         "generated_code": None,
         "generated_files": None,
         "execution_logs": None,
