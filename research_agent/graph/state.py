@@ -52,6 +52,10 @@ class AgentState(TypedDict):
     execution_return_code: Optional[int] # 実行時の終了コード
     last_execution_duration_sec: Optional[float]   # 直近試行の実行時間
     total_execution_duration_sec: Optional[float]  # 累積実行時間
+    last_evaluation_duration_sec: Optional[float]   # 直近試行のEvaluator解析時間
+    total_evaluation_duration_sec: Optional[float]  # 累積Evaluator解析時間
+    last_loop_duration_sec: Optional[float]         # 直近試行の実行+評価時間
+    total_loop_duration_sec: Optional[float]        # 累積の実行+評価時間
     
     # --- 5. ファイル情報 ---
     run_paths: Optional[RunPaths]        # runごとの保存先情報（workspace_dir を含む）
@@ -59,6 +63,8 @@ class AgentState(TypedDict):
     # --- 6. 結果と自己修復制御 ---
     retry_count: int                     # エラー発生時のリトライ回数
     evaluator_feedback: Optional[EvaluatorFeedback]  # Evaluatorの構造化フィードバック
+    llm_analysis_used: Optional[bool]      # Evaluator LLM解析を採用したか
+    llm_analysis_fallback_reason: Optional[str]  # LLM解析失敗時のフォールバック理由
     error_signature: Optional[str]       # 同一エラー判定用のフィンガープリント
     same_error_count: int                # 同一エラーの連続発生回数
     stop_reason: Optional[str]           # 停止理由（max_retry, repeated_errorなど）
@@ -88,9 +94,15 @@ def create_initial_state(task: Task) -> AgentState:
         "execution_return_code": None,
         "last_execution_duration_sec": None,
         "total_execution_duration_sec": 0.0,
+        "last_evaluation_duration_sec": None,
+        "total_evaluation_duration_sec": 0.0,
+        "last_loop_duration_sec": None,
+        "total_loop_duration_sec": 0.0,
         "run_paths": None,
         "retry_count": 0,
         "evaluator_feedback": None,
+        "llm_analysis_used": None,
+        "llm_analysis_fallback_reason": None,
         "error_signature": None,
         "same_error_count": 0,
         "stop_reason": None,

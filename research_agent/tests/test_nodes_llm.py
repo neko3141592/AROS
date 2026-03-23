@@ -215,6 +215,78 @@ def test_researcher_includes_failure_context_and_subtasks_in_prompt(
     assert "Review dependency options" in system_prompt
 
 
+def test_researcher_searches_with_task_keywords_and_fallbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    test_researcher_searches_with_task_keywords_and_fallbacks を実行する。
+    """
+    task = Task(
+        title="Transformer Model Implementation",
+        description="Implement a basic Transformer model based on 'Attention Is All You Need'.",
+        constraints=["local only"],
+        subtasks=[],
+    )
+    state = _build_state(task)
+    state["execution_stderr"] = "ModuleNotFoundError: No module named 'torch'"
+    state["evaluator_feedback"] = {
+        "summary": "missing_module",
+        "likely_cause": "Module 'torch' is not installed.",
+        "suggested_fixes": ["Use a fallback implementation"],
+        "can_self_fix": False,
+        "needs_research": True,
+        "return_code": 1,
+        "stdout": "",
+        "stderr": state["execution_stderr"],
+        "raw": {},
+    }
+
+    captured_keywords: list[list[str]] = []
+    captured_categories: list[list[str] | None] = []
+
+    def _fake_build_arxiv_query(*, keywords: list[str], categories: list[str] | None) -> str:
+        captured_keywords.append(keywords)
+        captured_categories.append(categories)
+        return f"query-{len(captured_keywords)}"
+
+    def _fake_fetch_arxiv_raw(**kwargs: Any) -> list[str]:
+        if kwargs["query"] in {"query-1", "query-2"}:
+            return []
+        return ["raw-paper"]
+
+    def _fake_parse_arxiv_response(raw: list[str]) -> list[str]:
+        if not raw:
+            return []
+        return ["paper"]
+
+    monkeypatch.setattr(researcher_mod, "build_arxiv_query", _fake_build_arxiv_query)
+    monkeypatch.setattr(researcher_mod, "fetch_arxiv_raw", _fake_fetch_arxiv_raw)
+    monkeypatch.setattr(researcher_mod, "parse_arxiv_response", _fake_parse_arxiv_response)
+    monkeypatch.setattr(
+        researcher_mod, "format_papers_for_llm", lambda _papers: "paper context"
+    )
+    monkeypatch.setattr(
+        researcher_mod,
+        "generate_text",
+        lambda **_kwargs: "## Retry Context\n- Use a minimal fallback implementation.",
+    )
+
+    result = researcher_mod.researcher_node(state)
+
+    assert result["status"] == "researching"
+    assert len(captured_keywords) == 3
+    assert "transformer" in [term.lower() for term in captured_keywords[0]]
+    assert "attention is all you need" in [
+        term.lower() for term in captured_keywords[0]
+    ]
+    assert "missing_module" not in [term.lower() for term in captured_keywords[0]]
+    assert "module 'torch' is not installed." not in [
+        term.lower() for term in captured_keywords[0]
+    ]
+    assert captured_categories[0] == ["cs.AI", "cs.LG"]
+    assert captured_categories[-1] is None
+
+
 def test_coder_saves_workspace_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """
     test_coder_saves_workspace_files を実行する。

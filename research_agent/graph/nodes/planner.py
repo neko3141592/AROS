@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage
 from pydantic import ValidationError
 
 from graph.state import AgentState
+from tools.cli_logging import log_llm_request, log_llm_response, log_node_end, log_node_start
 from tools.llm_client import LLMClientError, generate_text
 from tools.model_config import get_model_name
 from tools.planner_helpers import (
@@ -42,6 +43,14 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
         }
 
     try:
+        log_node_start(
+            "Planner",
+            {
+                "task_title": task.title,
+                "constraints": len(task.constraints),
+                "existing_subtasks": len(task.subtasks),
+            },
+        )
         system_prompt = render_prompt(
             "system_planner",
             {
@@ -57,6 +66,12 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
         )
 
         model_name = get_model_name("PLANNER_MODEL_NAME", DEFAULT_MODEL_NAME)
+        log_llm_request(
+            "Planner",
+            model_name,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
         llm_raw = generate_text(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -64,6 +79,7 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
             temperature=0.2,
             timeout=30,
         )
+        log_llm_response("Planner", llm_raw)
 
         parsed = _parse_planner_output(llm_raw)
         subtasks = _to_subtasks(parsed)
@@ -71,6 +87,13 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
         planned_task = task.model_copy(deep=True)
         planned_task.subtasks = subtasks
 
+        log_node_end(
+            "Planner",
+            {
+                "subtask_count": len(planned_task.subtasks),
+                "next_step": "researcher",
+            },
+        )
         return {
             "task": planned_task,
             "status": "planning",

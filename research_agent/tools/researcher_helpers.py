@@ -1,6 +1,41 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
+
+
+_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "based",
+    "be",
+    "basic",
+    "by",
+    "for",
+    "from",
+    "how",
+    "if",
+    "implement",
+    "implementation",
+    "in",
+    "into",
+    "is",
+    "it",
+    "model",
+    "of",
+    "on",
+    "or",
+    "the",
+    "this",
+    "to",
+    "use",
+    "using",
+    "with",
+}
 
 
 def _build_fallback_research_context(task_title: str, reason: str) -> str:
@@ -21,6 +56,96 @@ def _build_fallback_research_context(task_title: str, reason: str) -> str:
     )
 
 
+def _unique_terms(terms: list[str]) -> list[str]:
+    """
+    順序を保ったまま重複語を除く。
+    """
+    seen: set[str] = set()
+    result: list[str] = []
+    for term in terms:
+        normalized = term.strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(term.strip())
+    return result
+
+
+def _extract_search_terms(task_title: str, task_description: str) -> list[str]:
+    """
+    task title / description から arXiv 検索向けの短い技術語を抽出する。
+    """
+    raw_terms: list[str] = []
+
+    quoted_phrases = re.findall(r"'([^']+)'|\"([^\"]+)\"", task_description)
+    for left, right in quoted_phrases:
+        phrase = (left or right).strip()
+        if phrase:
+            raw_terms.append(phrase)
+
+    token_source = f"{task_title} {task_description}".lower()
+    token_candidates = re.findall(r"[a-zA-Z][a-zA-Z0-9.+_-]{2,}", token_source)
+    for token in token_candidates:
+        if token in _STOPWORDS:
+            continue
+        raw_terms.append(token)
+
+    preferred_terms: list[str] = []
+    for term in raw_terms:
+        lowered = term.lower()
+        if "attention is all you need" in lowered:
+            preferred_terms.append("attention is all you need")
+        elif "transformer" in lowered:
+            preferred_terms.append("transformer")
+        elif "bert" in lowered:
+            preferred_terms.append("bert")
+        elif "diffusion" in lowered:
+            preferred_terms.append("diffusion")
+        elif "llama" in lowered:
+            preferred_terms.append("llama")
+        elif "gpt" in lowered:
+            preferred_terms.append("gpt")
+        elif lowered not in _STOPWORDS:
+            preferred_terms.append(term)
+
+    return _unique_terms(preferred_terms)
+
+
+def _build_search_plan(
+    task_title: str,
+    task_description: str,
+) -> list[tuple[list[str], list[str] | None]]:
+    """
+    0件時に段階的に広げる検索プランを返す。
+    """
+    search_terms = _extract_search_terms(task_title, task_description)
+    if not search_terms:
+        search_terms = [task_title.strip()]
+
+    narrow_terms = search_terms[:3]
+    broad_terms = search_terms[:1]
+
+    plans = [
+        (narrow_terms, ["cs.AI", "cs.LG"]),
+        (broad_terms, ["cs.AI", "cs.LG"]),
+        (broad_terms, None),
+    ]
+
+    unique_plans: list[tuple[list[str], list[str] | None]] = []
+    seen: set[tuple[tuple[str, ...], tuple[str, ...] | None]] = set()
+    for keywords, categories in plans:
+        normalized = (
+            tuple(keyword.lower() for keyword in keywords),
+            tuple(categories) if categories is not None else None,
+        )
+        if not keywords or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_plans.append((keywords, categories))
+
+    return unique_plans
+
+
 def _generate_research_summary(
     task_title: str,
     task_description: str,
@@ -36,6 +161,7 @@ def _generate_research_summary(
     format_papers_for_llm_fn: Callable[..., str],
     render_prompt_fn: Callable[..., str],
     generate_text_fn: Callable[..., str],
+    log_search_attempt_fn: Callable[[list[str], list[str] | None, int], None] | None = None,
 ) -> tuple[str, int]:
     """
     arXiv検索とLLM要約の本処理を実行し、要約テキストと論文件数を返す。
@@ -56,18 +182,19 @@ def _generate_research_summary(
         render_prompt_fn: プロンプト描画関数。
         generate_text_fn: LLMテキスト生成関数。
     """
-    query_keywords = [task_title, task_description]
-    if previous_failure_summary:
-        query_keywords.append(previous_failure_summary)
-    if previous_failure_likely_cause:
-        query_keywords.append(previous_failure_likely_cause)
+    papers: list[Any] = []
+    for keywords, categories in _build_search_plan(task_title, task_description):
+        query = build_arxiv_query_fn(
+            keywords=keywords,
+            categories=categories,
+        )
+        raw_results = fetch_arxiv_raw_fn(query=query, max_results=5, sort_by="relevance")
+        papers = parse_arxiv_response_fn(raw_results)
+        if log_search_attempt_fn is not None:
+            log_search_attempt_fn(keywords, categories, len(papers))
+        if papers:
+            break
 
-    query = build_arxiv_query_fn(
-        keywords=query_keywords,
-        categories=["cs.AI", "cs.LG"],
-    )
-    raw_results = fetch_arxiv_raw_fn(query=query, max_results=5, sort_by="relevance")
-    papers = parse_arxiv_response_fn(raw_results)
     formatted_context = format_papers_for_llm_fn(papers)
 
     system_prompt = render_prompt_fn(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from json import JSONDecodeError
+from time import perf_counter
 from typing import Any, Dict
 
 from langchain_core.messages import AIMessage
@@ -11,6 +12,15 @@ from pydantic import ValidationError
 from graph.state import AgentState, EvaluatorFeedback
 from schema.llm_outputs import EvaluatorAnalysisOutput
 from schema.task import ExperimentResult, Task
+from tools.cli_logging import (
+    log_execution,
+    log_llm_request,
+    log_llm_response,
+    log_node_end,
+    log_node_start,
+    log_route,
+    preview_text,
+)
 from tools.evaluator_helpers import (
     LLM_STDERR_MAX_CHARS,
     LLM_STDOUT_MAX_CHARS,
@@ -45,6 +55,14 @@ class EvaluatorDecision:
     next_step: str
     stop_reason: str | None
     message: str
+
+
+@dataclass
+class EvaluatorFeedbackBuildResult:
+    feedback: EvaluatorFeedback
+    llm_analysis_used: bool
+    llm_analysis_fallback_reason: str | None
+    evaluation_duration_sec: float
 
 
 def _collect_workspace_file_list(run_paths: Any) -> list[str]:
@@ -103,7 +121,7 @@ def _analyze_failure_with_llm(
     task: Task,
     execution: LocalExecutionResult,
     base_feedback: EvaluatorFeedback,
-) -> EvaluatorFeedback:
+) -> EvaluatorFeedbackBuildResult:
     """
     失敗解析を LLM で補強し、失敗時はベースフィードバックへフォールバックする。
 
@@ -113,8 +131,14 @@ def _analyze_failure_with_llm(
         base_feedback: ヒューリスティック分類結果。
     """
     if not _should_use_evaluator_llm_analysis():
-        return base_feedback
+        return EvaluatorFeedbackBuildResult(
+            feedback=base_feedback,
+            llm_analysis_used=False,
+            llm_analysis_fallback_reason=None,
+            evaluation_duration_sec=0.0,
+        )
 
+    analysis_started_at = perf_counter()
     sanitized_stdout, sanitized_stderr = _sanitize_execution_outputs_for_llm(
         execution.stdout,
         execution.stderr,
@@ -138,6 +162,12 @@ def _analyze_failure_with_llm(
             "EVALUATOR_MODEL_NAME",
             DEFAULT_MODEL_NAME,
         )
+        log_llm_request(
+            "Evaluator",
+            evaluator_model,
+            system_prompt=system_prompt,
+            user_prompt="Return only the JSON object.",
+        )
         raw_text = generate_text(
             system_prompt=system_prompt,
             user_prompt="Return only the JSON object.",
@@ -145,22 +175,33 @@ def _analyze_failure_with_llm(
             temperature=0.0,
             timeout=DEFAULT_LLM_ANALYSIS_TIMEOUT_SEC,
         )
+        log_llm_response("Evaluator", raw_text)
         parsed = _parse_evaluator_analysis_output(raw_text)
-        return _merge_feedback_with_llm_analysis(base_feedback, parsed)
+        return EvaluatorFeedbackBuildResult(
+            feedback=_merge_feedback_with_llm_analysis(base_feedback, parsed),
+            llm_analysis_used=True,
+            llm_analysis_fallback_reason=None,
+            evaluation_duration_sec=perf_counter() - analysis_started_at,
+        )
     except (
         PromptManagerError,
         LLMClientError,
         JSONDecodeError,
         ValidationError,
         ValueError,
-    ):
-        return base_feedback
+    ) as error:
+        return EvaluatorFeedbackBuildResult(
+            feedback=base_feedback,
+            llm_analysis_used=False,
+            llm_analysis_fallback_reason=type(error).__name__,
+            evaluation_duration_sec=perf_counter() - analysis_started_at,
+        )
 
 
 def _build_evaluator_feedback(
     task: Task,
     execution: LocalExecutionResult,
-) -> EvaluatorFeedback:
+) -> EvaluatorFeedbackBuildResult:
     """
     実行結果からCoderへ渡す構造化フィードバックを組み立てる。
 
@@ -169,17 +210,22 @@ def _build_evaluator_feedback(
         execution: ローカル実行の結果。
     """
     if execution.returncode == 0:
-        return {
-            "summary": "success",
-            "likely_cause": "Execution completed successfully.",
-            "suggested_fixes": [],
-            "can_self_fix": False,
-            "needs_research": False,
-            "return_code": execution.returncode,
-            "stdout": execution.stdout,
-            "stderr": execution.stderr,
-            "raw": {},
-        }
+        return EvaluatorFeedbackBuildResult(
+            feedback={
+                "summary": "success",
+                "likely_cause": "Execution completed successfully.",
+                "suggested_fixes": [],
+                "can_self_fix": False,
+                "needs_research": False,
+                "return_code": execution.returncode,
+                "stdout": execution.stdout,
+                "stderr": execution.stderr,
+                "raw": {},
+            },
+            llm_analysis_used=False,
+            llm_analysis_fallback_reason=None,
+            evaluation_duration_sec=0.0,
+        )
 
     classification = _classify_failure(execution.stderr, execution.returncode)
     exception_line = _extract_exception_line(execution.stderr)
@@ -204,7 +250,12 @@ def _build_evaluator_feedback(
     )
 
 
-def _build_feedback_log_section(feedback: EvaluatorFeedback) -> str:
+def _build_feedback_log_section(
+    feedback: EvaluatorFeedback,
+    llm_analysis_used: bool,
+    llm_analysis_fallback_reason: str | None,
+    llm_analysis_duration_sec: float,
+) -> str:
     """
     execution_log に追記する FEEDBACK セクションを生成する。
 
@@ -218,6 +269,10 @@ def _build_feedback_log_section(feedback: EvaluatorFeedback) -> str:
         fixes_text = "- (none)"
 
     return (
+        "=== LLM ANALYSIS ===\n"
+        f"llm_analysis_used: {llm_analysis_used}\n"
+        f"llm_analysis_fallback_reason: {llm_analysis_fallback_reason or '(none)'}\n"
+        f"llm_analysis_duration_sec: {llm_analysis_duration_sec:.6f}\n\n"
         "=== FEEDBACK ===\n"
         f"summary: {feedback.get('summary', '')}\n"
         f"likely_cause: {feedback.get('likely_cause', '')}\n"
@@ -298,8 +353,6 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
     Args:
         state: ノード間で受け渡す現在の状態。
     """
-    print("--- [Node: Evaluator] 実験結果を評価しています... ---")
-
     # 1) 入力確認
     task = state.get("task")
     run_paths = state.get("run_paths")
@@ -311,6 +364,20 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
     previous_total_execution_duration_sec = float(
         state.get("total_execution_duration_sec") or 0.0
     )
+    previous_total_evaluation_duration_sec = float(
+        state.get("total_evaluation_duration_sec") or 0.0
+    )
+    minimum_loop_duration_sec = (
+        previous_total_execution_duration_sec + previous_total_evaluation_duration_sec
+    )
+    stored_total_loop_duration_sec = state.get("total_loop_duration_sec")
+    if stored_total_loop_duration_sec is None:
+        previous_total_loop_duration_sec = minimum_loop_duration_sec
+    else:
+        previous_total_loop_duration_sec = max(
+            float(stored_total_loop_duration_sec),
+            minimum_loop_duration_sec,
+        )
 
     if not task:
         return {
@@ -326,6 +393,17 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
             "messages": [AIMessage(content="Evaluator failed: Missing run_paths.")],
         }
 
+    log_node_start(
+        "Evaluator",
+        {
+            "task_title": task.title,
+            "retry_count": retry_count,
+            "entrypoint": execution_entrypoint,
+            "used_execution_sec": f"{previous_total_execution_duration_sec:.6f}",
+            "used_evaluation_sec": f"{previous_total_evaluation_duration_sec:.6f}",
+            "used_loop_sec": f"{previous_total_loop_duration_sec:.6f}",
+        },
+    )
     execution_timeout_sec = _read_positive_float_env(
         "EXECUTION_TIMEOUT_SEC",
         DEFAULT_EXECUTION_TIMEOUT_SEC,
@@ -373,21 +451,33 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
             f"Per Try Timeout Sec: {execution_timeout_sec:.6f}\n"
             f"Total Timeout Sec: {max_total_execution_time_sec:.6f}\n"
             f"Total Used Sec: {previous_total_execution_duration_sec:.6f}\n"
+            f"Total Evaluation Duration Sec: {previous_total_evaluation_duration_sec:.6f}\n"
+            f"Total Loop Duration Sec: {previous_total_loop_duration_sec:.6f}\n"
             f"Applied Timeout Sec: {next_execution_timeout_sec:.6f}\n\n"
-            f"{_build_feedback_log_section(feedback)}"
+            f"{_build_feedback_log_section(feedback, False, None, 0.0)}"
         )
         result = ExperimentResult(
             task_id=task.id,
             success=False,
             metrics={
                 "execution_duration_sec": 0.0,
+                "evaluation_duration_sec": 0.0,
+                "loop_duration_sec": 0.0,
                 "total_execution_duration_sec": previous_total_execution_duration_sec,
+                "total_evaluation_duration_sec": previous_total_evaluation_duration_sec,
+                "total_loop_duration_sec": previous_total_loop_duration_sec,
             },
             logs=execution_log,
             error_message=timeout_message,
             stop_reason="total_timeout",
         )
         write_execution_log(run_paths, execution_log, append=True)
+        log_execution(
+            entrypoint=execution_entrypoint,
+            timeout_sec=next_execution_timeout_sec,
+            skipped=True,
+        )
+        log_route("Evaluator", "done", "total_timeout")
 
         file_list = _collect_workspace_file_list(run_paths)
         if not file_list and (run_paths.workspace_dir / execution_entrypoint).exists():
@@ -402,11 +492,17 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
             "execution_return_code": None,
             "execution_entrypoint": execution_entrypoint,
             "last_execution_duration_sec": 0.0,
+            "last_evaluation_duration_sec": 0.0,
+            "last_loop_duration_sec": 0.0,
             "total_execution_duration_sec": previous_total_execution_duration_sec,
+            "total_evaluation_duration_sec": previous_total_evaluation_duration_sec,
+            "total_loop_duration_sec": previous_total_loop_duration_sec,
             "status": "failed",
             "current_step": "done",
             "retry_count": retry_count,
             "evaluator_feedback": feedback,
+            "llm_analysis_used": False,
+            "llm_analysis_fallback_reason": None,
             "error_signature": state.get("error_signature"),
             "same_error_count": state.get("same_error_count", 0),
             "stop_reason": "total_timeout",
@@ -420,11 +516,25 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
         entrypoint=execution_entrypoint,
         timeout_sec=next_execution_timeout_sec,
     )
+    log_execution(
+        entrypoint=execution_entrypoint,
+        timeout_sec=next_execution_timeout_sec,
+        returncode=execution.returncode,
+        duration_sec=execution.duration_sec,
+        stdout=execution.stdout,
+        stderr=execution.stderr,
+    )
     is_success = execution.returncode == 0
-    feedback = _build_evaluator_feedback(task=task, execution=execution)
+    feedback_result = _build_evaluator_feedback(task=task, execution=execution)
+    feedback = feedback_result.feedback
     next_total_execution_duration_sec = (
         previous_total_execution_duration_sec + execution.duration_sec
     )
+    next_total_evaluation_duration_sec = (
+        previous_total_evaluation_duration_sec + feedback_result.evaluation_duration_sec
+    )
+    loop_duration_sec = execution.duration_sec + feedback_result.evaluation_duration_sec
+    next_total_loop_duration_sec = previous_total_loop_duration_sec + loop_duration_sec
 
     if is_success:
         current_error_signature = None
@@ -447,11 +557,15 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
         f"Return Code: {execution.returncode}\n\n"
         f"Duration Sec: {execution.duration_sec:.6f}\n"
         f"Total Duration Sec: {next_total_execution_duration_sec:.6f}\n\n"
+        f"Evaluation Duration Sec: {feedback_result.evaluation_duration_sec:.6f}\n"
+        f"Total Evaluation Duration Sec: {next_total_evaluation_duration_sec:.6f}\n"
+        f"Loop Duration Sec: {loop_duration_sec:.6f}\n"
+        f"Total Loop Duration Sec: {next_total_loop_duration_sec:.6f}\n\n"
         "=== STDOUT ===\n"
         f"{execution.stdout.rstrip()}\n\n"
         "=== STDERR ===\n"
         f"{execution.stderr.rstrip()}\n\n"
-        f"{_build_feedback_log_section(feedback)}"
+        f"{_build_feedback_log_section(feedback, feedback_result.llm_analysis_used, feedback_result.llm_analysis_fallback_reason, feedback_result.evaluation_duration_sec)}"
     )
 
     # 3) ExperimentResult の作成
@@ -467,7 +581,11 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
         success=is_success,
         metrics={
             "execution_duration_sec": execution.duration_sec,
+            "evaluation_duration_sec": feedback_result.evaluation_duration_sec,
+            "loop_duration_sec": loop_duration_sec,
             "total_execution_duration_sec": next_total_execution_duration_sec,
+            "total_evaluation_duration_sec": next_total_evaluation_duration_sec,
+            "total_loop_duration_sec": next_total_loop_duration_sec,
         },
         logs=execution_log,
         error_message=error_message,
@@ -495,6 +613,31 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
     )
     next_retry_count = retry_count if is_success else retry_count + 1
     result = result.model_copy(update={"stop_reason": decision.stop_reason})
+    log_route(
+        "Evaluator",
+        decision.next_step,
+        (
+            f"summary={feedback.get('summary')} "
+            f"can_self_fix={feedback.get('can_self_fix')} "
+            f"needs_research={feedback.get('needs_research')} "
+            f"message={preview_text(decision.message)}"
+        ),
+    )
+    log_node_end(
+        "Evaluator",
+        {
+            "status": decision.status,
+            "next_step": decision.next_step,
+            "stop_reason": decision.stop_reason or "(none)",
+            "retry_count": next_retry_count,
+            "llm_analysis_used": feedback_result.llm_analysis_used,
+            "llm_analysis_fallback_reason": (
+                feedback_result.llm_analysis_fallback_reason or "(none)"
+            ),
+            "evaluation_duration_sec": f"{feedback_result.evaluation_duration_sec:.6f}",
+            "total_loop_duration_sec": f"{next_total_loop_duration_sec:.6f}",
+        },
+    )
 
     # 7) Stateの更新
     return {
@@ -505,11 +648,17 @@ def evaluator_node(state: AgentState) -> Dict[str, Any]:
         "execution_return_code": execution.returncode,
         "execution_entrypoint": execution_entrypoint,
         "last_execution_duration_sec": execution.duration_sec,
+        "last_evaluation_duration_sec": feedback_result.evaluation_duration_sec,
+        "last_loop_duration_sec": loop_duration_sec,
         "total_execution_duration_sec": next_total_execution_duration_sec,
+        "total_evaluation_duration_sec": next_total_evaluation_duration_sec,
+        "total_loop_duration_sec": next_total_loop_duration_sec,
         "status": decision.status,
         "current_step": decision.next_step,
         "retry_count": next_retry_count,
         "evaluator_feedback": feedback,
+        "llm_analysis_used": feedback_result.llm_analysis_used,
+        "llm_analysis_fallback_reason": feedback_result.llm_analysis_fallback_reason,
         "error_signature": current_error_signature,
         "same_error_count": next_same_error_count,
         "stop_reason": decision.stop_reason,

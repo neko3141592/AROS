@@ -6,6 +6,14 @@ from typing import Any, Dict
 from langchain_core.messages import AIMessage
 
 from graph.state import AgentState
+from tools.cli_logging import (
+    log_llm_request,
+    log_llm_response,
+    log_node_end,
+    log_node_start,
+    log_tool_result,
+    preview_text,
+)
 from tools.coder_helpers import (
     _build_failure_context,
     _maybe_extract_legacy_files_payload,
@@ -55,6 +63,14 @@ def coder_node(state: AgentState) -> Dict[str, Any]:
         }
 
     try:
+        log_node_start(
+            "Coder",
+            {
+                "task_title": task.title,
+                "retry_count": state.get("retry_count", 0),
+                "workspace_dir": run_paths.workspace_dir,
+            },
+        )
         system_prompt = render_prompt(
             "system_coder",
             {
@@ -105,6 +121,14 @@ def coder_node(state: AgentState) -> Dict[str, Any]:
             },
         ]
         for step in range(max_tool_steps):
+            log_llm_request(
+                "Coder",
+                model_name,
+                system_prompt=None,
+                user_prompt=messages[-1].get("content") if messages else "",
+                tools=[tool["function"]["name"] for tool in TOOL_SCHEMAS],
+                message_count=len(messages),
+            )
             response = generate_with_tools(
                 messages=messages,
                 model=model_name,
@@ -113,9 +137,13 @@ def coder_node(state: AgentState) -> Dict[str, Any]:
                 temperature=0.2,
                 timeout=60,
             )
-
             tool_calls = response.get("tool_calls") or []
             content = (response.get("content") or "").strip()
+            log_llm_response(
+                "Coder",
+                content,
+                tool_calls if isinstance(tool_calls, list) else None,
+            )
 
             if isinstance(tool_calls, list) and tool_calls:
                 messages.append(
@@ -130,9 +158,11 @@ def coder_node(state: AgentState) -> Dict[str, Any]:
                     if not isinstance(tool_call, dict):
                         tool_result = {
                             "ok": False,
+                            "name": "unknown",
                             "error": "Tool call payload must be an object.",
                         }
                         step_results.append(tool_result)
+                        log_tool_result("Coder", tool_result)
                         messages.append(
                             {
                                 "role": "tool",
@@ -144,6 +174,7 @@ def coder_node(state: AgentState) -> Dict[str, Any]:
                         continue
                     tool_result = _execute_tool_call(tool_call, run_paths, TOOL_FUNCTIONS)
                     step_results.append(tool_result)
+                    log_tool_result("Coder", tool_result)
                     messages.append(
                         {
                             "role": "tool",
@@ -183,6 +214,15 @@ def coder_node(state: AgentState) -> Dict[str, Any]:
                     continue
 
                 generated_files = workspace_state["generated_files"]
+                log_node_end(
+                    "Coder",
+                    {
+                        "workspace_files": len(generated_files),
+                        "entrypoint": execution_entrypoint,
+                        "completion_message": preview_text(content),
+                        "next_step": "evaluator",
+                    },
+                )
                 return {
                     **workspace_state,
                     "execution_entrypoint": execution_entrypoint,
@@ -206,6 +246,15 @@ def coder_node(state: AgentState) -> Dict[str, Any]:
             workspace_read_file,
             save_generated_code,
             entrypoint=execution_entrypoint,
+        )
+        log_node_end(
+            "Coder",
+            {
+                "workspace_files": len(workspace_state["generated_files"]),
+                "entrypoint": execution_entrypoint,
+                "reason": "max_tool_steps_reached",
+                "next_step": "evaluator",
+            },
         )
         return {
             **workspace_state,

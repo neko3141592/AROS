@@ -5,6 +5,7 @@ from typing import Any, Dict
 import sys
 from dotenv import load_dotenv
 
+from tools.cli_logging import log_banner, log_kv, preview_text
 from tools.file_io import RunPaths, create_run_paths
 
 # パッケージのルート(research_agent)をパスに追加して、絶対インポートを可能にする
@@ -124,7 +125,7 @@ def run_aros(
         project_id: プロジェクトID。指定時は project/runs 配下で実行管理する。
         parent_run_id: 継承元run ID。指定時は親workspaceを引き継ぐ。
     """
-    print("=== AROS (Autonomous Research Loop) v0.1 Starting ===")
+    log_banner("AROS (Autonomous Research Loop) Starting")
     
     # 1. 初期タスクの構築
     # 本来はユーザー入力から自動生成されるが、v0.1では手動で定義
@@ -141,6 +142,15 @@ def run_aros(
         project_id=project_id,
         parent_run_id=parent_run_id,
     )
+    log_kv("Task Title", task_title)
+    log_kv("Task Description", preview_text(task_description, limit=220))
+    log_kv("Task ID", initial_task.id)
+    log_kv("Run ID", run_paths.run_id)
+    log_kv("Project ID", run_paths.project_id or "(none)")
+    log_kv("Parent Run ID", run_paths.parent_run_id or "(none)")
+    log_kv("Workspace Source Run ID", run_paths.workspace_source_run_id or "(none)")
+    log_kv("Workspace Dir", run_paths.workspace_dir)
+    log_kv("Execution Entrypoint", initial_task.execution_entrypoint)
 
     # 3. 初期状態 (Initial State) の設定
     initial_state: Dict[str, Any] = {
@@ -170,33 +180,52 @@ def run_aros(
 
     # 3. グラフの実行 (LangGraph Invoke)
     # これにより Planner -> Researcher -> Coder -> Evaluator (-> Coder ...) の順で動く
-    print(f"Executing task: {task_title}...")
+    log_kv("Graph Invoke", "planner -> researcher -> coder -> evaluator")
     final_state = research_graph.invoke(initial_state)
 
     # 4. 結果の表示
-    print("\n=== Execution Summary ===")
-    print(f"Status: {final_state['status']}")
+    log_banner("Execution Summary")
+    log_kv("Status", final_state["status"])
     
     # 状態を JSON に保存
     save_state_to_json(final_state, task_id=initial_task.id)
 
-    print(f"Final Step: {final_state['current_step']}")
-    print(f"Retry Count: {final_state['retry_count']}")
+    log_kv("Final Step", final_state["current_step"])
+    log_kv("Retry Count", final_state["retry_count"])
+    log_kv("Stop Reason", final_state.get("stop_reason") or "(none)")
+    log_kv(
+        "Execution Entrypoint",
+        final_state.get("execution_entrypoint") or initial_task.execution_entrypoint,
+    )
+    if final_state.get("execution_return_code") is not None:
+        log_kv("Return Code", final_state["execution_return_code"])
+    if final_state.get("last_execution_duration_sec") is not None:
+        log_kv(
+            "Last Duration Sec",
+            f"{float(final_state['last_execution_duration_sec']):.6f}",
+        )
+    if final_state.get("total_execution_duration_sec") is not None:
+        log_kv(
+            "Total Duration Sec",
+            f"{float(final_state['total_execution_duration_sec']):.6f}",
+        )
     
     if final_state["result"]:
         result = final_state["result"]
-        print(f"Success: {result.success}")
+        log_kv("Success", result.success)
         if result.success:
-            print("--- Generated Code Snippet ---")
             snippet = _read_workspace_main_code(run_paths)[:200]
-            print((snippet + "...") if snippet else "(main.py not found)")
+            log_kv(
+                "Generated Code Snippet",
+                preview_text((snippet + "...") if snippet else "(entrypoint not found)", 220),
+            )
         else:
-            print(f"Error: {result.error_message}")
+            log_kv("Error", preview_text(result.error_message, 220))
 
-    print("\n=== Message History ===")
+    log_banner("Message History")
     for msg in final_state["messages"]:
         role = "AI" if not isinstance(msg, HumanMessage) else "User"
-        print(f"[{role}]: {msg.content}")
+        log_kv(f"[{role}]", preview_text(msg.content, 220))
 
 if __name__ == "__main__":
     # デフォルトのタスク内容。引数から取ることも可能。

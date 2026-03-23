@@ -37,8 +37,14 @@ def _build_state(task: Task, run_paths: Any, retry_count: int = 0) -> Dict[str, 
         "execution_return_code": None,
         "last_execution_duration_sec": None,
         "total_execution_duration_sec": 0.0,
+        "last_evaluation_duration_sec": None,
+        "total_evaluation_duration_sec": 0.0,
+        "last_loop_duration_sec": None,
+        "total_loop_duration_sec": 0.0,
         "retry_count": retry_count,
         "evaluator_feedback": None,
+        "llm_analysis_used": None,
+        "llm_analysis_fallback_reason": None,
         "error_signature": None,
         "same_error_count": 0,
         "stop_reason": None,
@@ -82,7 +88,15 @@ def test_evaluator_marks_completed_on_success(tmp_path: Path) -> None:
     assert result["result"].stop_reason is None
     assert result["last_execution_duration_sec"] is not None
     assert result["total_execution_duration_sec"] is not None
+    assert result["last_evaluation_duration_sec"] == 0.0
+    assert result["total_evaluation_duration_sec"] == 0.0
+    assert result["last_loop_duration_sec"] == result["last_execution_duration_sec"]
+    assert result["total_loop_duration_sec"] == result["total_execution_duration_sec"]
+    assert result["llm_analysis_used"] is False
+    assert result["llm_analysis_fallback_reason"] is None
     assert "=== STDOUT ===" in result["execution_logs"]
+    assert "=== LLM ANALYSIS ===" in result["execution_logs"]
+    assert "llm_analysis_used: False" in result["execution_logs"]
     assert "=== FEEDBACK ===" in result["execution_logs"]
     assert "summary: success" in result["execution_logs"]
     assert "ok" in read_execution_log(run_paths)
@@ -379,9 +393,16 @@ def test_evaluator_skips_execution_when_total_budget_is_exhausted(
     assert result["result"].stop_reason == "total_timeout"
     assert result["execution_return_code"] is None
     assert result["last_execution_duration_sec"] == 0.0
+    assert result["last_evaluation_duration_sec"] == 0.0
+    assert result["last_loop_duration_sec"] == 0.0
     assert result["total_execution_duration_sec"] == 180.0
+    assert result["total_evaluation_duration_sec"] == 0.0
+    assert result["total_loop_duration_sec"] == 180.0
     assert result["retry_count"] == 1
     assert result["evaluator_feedback"]["summary"] == "timeout"
+    assert result["llm_analysis_used"] is False
+    assert result["llm_analysis_fallback_reason"] is None
+    assert "llm_analysis_used: False" in result["execution_logs"]
     assert "Skipped: total timeout budget exhausted before execution." in result["execution_logs"]
 
 
@@ -429,6 +450,10 @@ def test_evaluator_uses_llm_analysis_when_enabled(
     assert feedback["suggested_fixes"][0] == "Define missing_name before printing it"
     assert feedback["can_self_fix"] is True
     assert feedback["needs_research"] is False
+    assert result["llm_analysis_used"] is True
+    assert result["llm_analysis_fallback_reason"] is None
+    assert result["last_evaluation_duration_sec"] >= 0.0
+    assert "llm_analysis_used: True" in result["execution_logs"]
 
 
 def test_evaluator_falls_back_when_llm_analysis_fails(
@@ -463,6 +488,69 @@ def test_evaluator_falls_back_when_llm_analysis_fails(
 
     assert feedback["summary"] == "name_or_type_error"
     assert "Mismatched variable name" in feedback["likely_cause"]
+    assert result["llm_analysis_used"] is False
+    assert result["llm_analysis_fallback_reason"] == "JSONDecodeError"
+    assert "llm_analysis_fallback_reason: JSONDecodeError" in result["execution_logs"]
+
+
+def test_evaluator_tracks_evaluation_and_loop_duration_with_llm(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """
+    test_evaluator_tracks_evaluation_and_loop_duration_with_llm を実行する。
+    """
+    task = Task(
+        title="Evaluator Duration Metrics",
+        description="Track execution and evaluation duration separately",
+        constraints=[],
+        subtasks=[],
+    )
+    run_paths = create_run_paths(task_id=task.id, base_dir=tmp_path)
+    save_workspace_files(paths=run_paths, files={"main.py": "print(missing_name)\n"})
+    state = _build_state(task=task, run_paths=run_paths, retry_count=0)
+    state["total_execution_duration_sec"] = 5.0
+    state["total_evaluation_duration_sec"] = 1.5
+    state["total_loop_duration_sec"] = 6.5
+
+    ticks = iter([100.0, 100.25])
+    monkeypatch.setattr(evaluator_mod, "perf_counter", lambda: next(ticks))
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(
+        evaluator_mod,
+        "run_workspace_python",
+        lambda **_kwargs: evaluator_mod.LocalExecutionResult(
+            stdout="",
+            stderr="NameError: name 'missing_name' is not defined",
+            returncode=1,
+            duration_sec=2.0,
+        ),
+    )
+    monkeypatch.setattr(
+        evaluator_mod,
+        "generate_text",
+        lambda **_kwargs: json.dumps(
+            {
+                "likely_cause": "Variable is undefined.",
+                "suggested_fixes": ["Define the variable first"],
+                "can_self_fix": True,
+                "needs_research": False,
+            }
+        ),
+    )
+
+    result = evaluator_mod.evaluator_node(state)
+
+    assert result["last_execution_duration_sec"] == 2.0
+    assert result["last_evaluation_duration_sec"] == 0.25
+    assert result["last_loop_duration_sec"] == 2.25
+    assert result["total_execution_duration_sec"] == 7.0
+    assert result["total_evaluation_duration_sec"] == 1.75
+    assert result["total_loop_duration_sec"] == 8.75
+    assert result["result"].metrics["evaluation_duration_sec"] == 0.25
+    assert result["result"].metrics["loop_duration_sec"] == 2.25
+    assert result["result"].metrics["total_loop_duration_sec"] == 8.75
+    assert "Total Loop Duration Sec: 8.750000" in result["execution_logs"]
+    assert "llm_analysis_duration_sec: 0.250000" in result["execution_logs"]
 
 
 def test_evaluator_keeps_heuristic_routing_flags_for_name_error(

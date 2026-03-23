@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Literal
 
 from graph.state import AgentState
+from tools.cli_logging import log_route
 
 
 def should_continue(state: AgentState) -> Literal["done", "coder", "researcher"]:
@@ -22,22 +23,25 @@ def should_continue(state: AgentState) -> Literal["done", "coder", "researcher"]
     status = state.get("status")
 
     if current_step == "researcher" or status == "researching":
-        print(
-            "--- [Edge: should_continue] 実験失敗。"
-            f"Researcherへ戻ります（現在リトライ数: {state.get('retry_count')}） ---"
+        log_route(
+            "Edge:should_continue",
+            "researcher",
+            f"retry_count={state.get('retry_count')}",
         )
         return "researcher"
 
     if current_step == "coder" or status == "coding":
-        print(
-            "--- [Edge: should_continue] 実験失敗。"
-            f"Coderへ戻ります（現在リトライ数: {state.get('retry_count')}） ---"
+        log_route(
+            "Edge:should_continue",
+            "coder",
+            f"retry_count={state.get('retry_count')}",
         )
         return "coder"
 
     # 成功 (completed) または 上限到達 (failed) の場合は終了
-    print(
-        "--- [Edge: should_continue] 実行終了判定"
-        f"（ステータス: {status}, current_step: {current_step}） ---"
+    log_route(
+        "Edge:should_continue",
+        "done",
+        f"status={status} current_step={current_step}",
     )
     return "done"
